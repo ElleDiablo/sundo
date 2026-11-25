@@ -1,3 +1,12 @@
+/**
+ * SundoGithub: lets GitHub Actions deploy to AWS without any stored password or access key
+ * (ADR-0007). One per AWS account, deployed by hand, never by CI, so a workflow change can't
+ * widen its own access.
+ *
+ * GitHub signs a short-lived OIDC token saying "this is repo sundo, environment dev"; AWS checks
+ * the signature and this role's trust policy, then lends 1-hour credentials that can only assume
+ * the CDK bootstrap roles.
+ */
 import { CfnOutput, DefaultStackSynthesizer, Duration, Stack, type StackProps } from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import type { Construct } from "constructs";

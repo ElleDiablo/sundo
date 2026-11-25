@@ -1,3 +1,7 @@
+/**
+ * Tests for the tile map helpers: building a map from text rows ("#" wall, "." floor), looking up
+ * walls (outside the map counts as a wall), and converting engine units to tile numbers.
+ */
 import { describe, expect, it } from "vitest";
 import { isWall, mapFromRows, tileOf } from "./map.ts";
 
@@ -31,6 +35,8 @@ describe("isWall", () => {
 });
 
 describe("tileOf", () => {
+  // 1 tile = 1000 units: units 0–999 are tile 0, 1000 is tile 1. Negative units (off the map's
+  // top or left edge) must round down too, to tile -1, so they count as outside the map.
   it("rounds down to the containing tile, including negatives", () => {
     expect(tileOf(0)).toBe(0);
     expect(tileOf(999)).toBe(0);

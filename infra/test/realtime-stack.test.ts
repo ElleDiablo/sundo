@@ -1,3 +1,7 @@
+/**
+ * Tests for the multiplayer relay stack: the TTL table, the WebSocket routes, the throttle, the
+ * Lambda's runtime, and least-privilege IAM (no wildcards).
+ */
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -35,7 +39,13 @@ describe("RealtimeStack", () => {
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route")).map(
       (r) => (r as { Properties: { RouteKey: string } }).Properties.RouteKey,
     );
-    expect(routes.sort()).toEqual(["$connect", "$default", "$disconnect", "create_room"]);
+    expect(routes.sort()).toEqual([
+      "$connect",
+      "$default",
+      "$disconnect",
+      "create_room",
+      "join_room",
+    ]);
   });
 
   it("throttles the stage so a runaway client can't run up a bill", () => {

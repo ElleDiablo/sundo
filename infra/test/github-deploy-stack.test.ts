@@ -1,3 +1,7 @@
+/**
+ * Tests for the GitHub deploy stack's trust and permission policies. These two policies are the
+ * whole security of keyless deploys, so every condition is pinned down exactly.
+ */
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";

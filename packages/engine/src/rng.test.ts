@@ -1,3 +1,8 @@
+/**
+ * Tests for the seeded random number generator. The property that matters most is the first one:
+ * the same seed always gives the same numbers, which is what makes replays and tests repeatable
+ * (ADR-0004).
+ */
 import { describe, expect, it } from "vitest";
 import { createRng } from "./rng.ts";
 
@@ -25,6 +30,7 @@ describe("createRng", () => {
     }
   });
 
+  // Off-by-one check: rolling 1–5 a thousand times must hit both 1 and 5, and never 0 or 6.
   it("int() covers both ends of the range and nothing outside it", () => {
     const rng = createRng(123);
     const seen = new Set<number>();
@@ -45,6 +51,7 @@ describe("createRng", () => {
     expect(() => rng.pick([])).toThrow(RangeError);
   });
 
+  // A saved game stores rng.state; a generator rebuilt from it must continue the same sequence.
   it("can resume from a saved state", () => {
     const rng = createRng(2026);
     rng.next();

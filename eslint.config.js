@@ -1,3 +1,12 @@
+/**
+ * ESLint (code checker) settings for the whole repository, in the "flat config" format.
+ *
+ * Layers, applied in order:
+ *   1. ignore build output, CDK output, installed packages and the private notes folder
+ *   2. JavaScript's recommended rules, then TypeScript's recommended rules
+ *   3. extra rules for the engine only, which enforce ADR-0004 (deterministic: no Math.random,
+ *      no clock, no browser APIs, no network), so a mistake fails CI instead of breaking replays
+ */
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 

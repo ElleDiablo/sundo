@@ -1,3 +1,10 @@
+/**
+ * The CDK app: lists every stack for one environment. `cdk synth` / `cdk diff` / `cdk deploy`
+ * run this file (see cdk.json) to build the CloudFormation templates.
+ *
+ *   SundoRealtime-<env>  WebSocket relay (rooms)          SundoWeb-<env>  the website
+ *   SundoGithub          GitHub's deploy role (by hand)
+ */
 import { App, Tags } from "aws-cdk-lib";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";

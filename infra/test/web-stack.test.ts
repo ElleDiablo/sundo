@@ -1,3 +1,7 @@
+/**
+ * Tests for the website stack: private bucket, HTTPS-only CloudFront with Origin Access Control,
+ * nothing billed by the hour. They read the generated CloudFormation template; no AWS needed.
+ */
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { mkdtempSync, writeFileSync } from "node:fs";

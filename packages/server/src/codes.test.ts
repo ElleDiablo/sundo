@@ -1,3 +1,7 @@
+/**
+ * Tests for room codes: the allowed letters, the rude-word filter, and that generated codes are
+ * always allowed. The random source is replaced with fixed numbers so results are predictable.
+ */
 import { describe, expect, it } from "vitest";
 import { CODE_LETTERS, generateCode, isAllowedCode } from "./codes.ts";
 

@@ -44,6 +44,8 @@ function senderFor(event: APIGatewayProxyWebsocketEventV2): Sender {
 export async function handler(event: APIGatewayProxyWebsocketEventV2): Promise<RelayResult> {
   const { routeKey, connectionId } = event.requestContext;
   return handleRoute(routeKey, connectionId, event.body, {
+    // console output goes to CloudWatch Logs (the relay's log group, kept two weeks).
+    log: (message) => console.warn(message),
     store,
     sender: senderFor(event),
     now: Date.now,
