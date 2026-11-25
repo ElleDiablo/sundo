@@ -8,10 +8,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
-    "assets": "node scripts/make-assets.ts"
+    "assets": "node scripts/make-assets.ts",
+    "config": "node scripts/write-local-config.ts"
   },
   "dependencies": {
     "@sundo/engine": "*",
+    "@sundo/server": "*",
     "phaser": "^4.2.1"
   },
   "devDependencies": {

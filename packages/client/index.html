@@ -21,6 +21,96 @@
         position: fixed;
         inset: 0 0 28px;
       }
+      #lobby {
+        position: fixed;
+        inset: 0 0 28px;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 12px;
+        text-align: center;
+        background: radial-gradient(
+          circle at 50% 45%,
+          rgba(58, 38, 16, 0.55),
+          rgba(11, 14, 22, 0.88) 60%
+        );
+        padding: 16px;
+      }
+      #lobby h1 {
+        margin: 0;
+        font:
+          700 clamp(44px, 10vw, 84px) / 1 "Courier New",
+          monospace;
+        letter-spacing: 0.08em;
+        color: #f0a24a;
+      }
+      .tagline {
+        margin: 0 0 8px;
+        color: #ddd7c6;
+      }
+      #room-code {
+        font:
+          700 clamp(40px, 9vw, 72px) / 1 "Courier New",
+          monospace;
+        letter-spacing: 0.3em;
+        padding-left: 0.3em;
+        color: #ddd7c6;
+        border: 2px solid #f0a24a;
+        border-radius: 6px;
+        padding-block: 8px;
+      }
+      #lobby-status {
+        margin: 0;
+        min-height: 1.4em;
+        max-width: 42ch;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
+      }
+      #lobby button {
+        font:
+          600 15px/1 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        padding: 12px 18px;
+        border-radius: 6px;
+        border: 1px solid #3a4560;
+        background: #121726;
+        color: #ddd7c6;
+        cursor: pointer;
+      }
+      #lobby button#create,
+      #lobby button#enter {
+        background: #f0a24a;
+        border-color: #f0a24a;
+        color: #0b0e16;
+      }
+      #lobby button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #lobby button:focus-visible {
+        outline: 2px solid #ddd7c6;
+        outline-offset: 2px;
+      }
+      #room-badge {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        font:
+          700 14px/1 "Courier New",
+          monospace;
+        letter-spacing: 0.15em;
+        color: #f0a24a;
+        background: rgba(11, 14, 22, 0.75);
+        border: 1px solid #3a4560;
+        border-radius: 4px;
+        padding: 6px 8px;
+      }
       footer {
         position: fixed;
         inset: auto 0 0;
@@ -32,6 +122,18 @@
   </head>
   <body>
     <div id="game"></div>
+    <section id="lobby" aria-labelledby="lobby-title">
+      <h1 id="lobby-title">SUNDO</h1>
+      <p class="tagline">Bring them home before dawn.</p>
+      <div id="room-code" hidden></div>
+      <p id="lobby-status" role="status" aria-live="polite"></p>
+      <div class="actions">
+        <button id="create" type="button">Create room</button>
+        <button id="enter" type="button" hidden>Start walking</button>
+        <button id="join" type="button" disabled title="Coming next: S1-04">Join with code</button>
+      </div>
+    </section>
+    <div id="room-badge" hidden></div>
     <footer>Sundo · dev build · WASD or arrow keys to walk</footer>
     <script type="module" src="./src/main.ts"></script>
   </body>
