@@ -144,6 +144,7 @@ sequenceDiagram
 |---|---|---|---|
 | `$connect` / `$disconnect` | any → server | (none) | once |
 | `create_room` | host → server → host | `{}` now (`{ name, hat, shirt }` from S2-01); reply `{ type: "room_created", code }` | once |
+| `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` | once |
 | `join` | player → server → host | `{ room, name, hat, shirt }` | once |
 | `input` | player → host | `{ seq, up, down, left, right, light, call, baliktad, emote }` | on change, ≤ 10/s |
 | `snapshot` | host → players | `{ tick, players[], kids[], tikbalang, timeLeft }` | 10/s |
@@ -163,6 +164,7 @@ snapshots. That hides network jitter. It's the standard technique in multiplayer
 | PK | SK | Attributes | Purpose |
 |---|---|---|---|
 | `ROOM#BAHO` | `META` | `hostConnId, status, seed, createdAt, ttl` | Room info |
+| `ROOM#BAHO` | `SEAT#0`…`SEAT#3` | `connId, ttl` | A taken seat. Created with a conditional write, so two players can't get the same seat and a 5th is refused |
 | `ROOM#BAHO` | `CONN#<connId>` | `name, hat, shirt, seat, joinedAt, ttl` | Who's in the room |
 | `CONN#<connId>` | `ROOM` | `room, ttl` | Find the room when someone disconnects |
 
