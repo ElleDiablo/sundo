@@ -1,0 +1,22 @@
+{
+  "name": "@sundo/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./handler": "./src/handler.ts",
+    "./messages": "./src/messages.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.164",
+    "@types/node": "^26.6.10"
+  },
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1177.0",
+    "@aws-sdk/client-dynamodb": "^3.1177.0",
+    "@aws-sdk/lib-dynamodb": "^3.1177.0"
+  }
+}
