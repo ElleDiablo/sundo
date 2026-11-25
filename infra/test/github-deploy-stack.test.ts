@@ -10,6 +10,7 @@ describe("GithubDeployStack", () => {
     const app = new App();
     const stack = new GithubDeployStack(app, "SundoGithub-test", {
       repo: "ElleDiablo/sundo",
+      oidcSubjectPrefix: "repo:ElleDiablo@100169794/sundo@1471471072",
       githubEnvironment: "dev",
       env: { account: "111111111111", region: "ap-southeast-1" },
     });
@@ -23,7 +24,7 @@ describe("GithubDeployStack", () => {
     });
   });
 
-  it("lets only the repo's dev Environment assume the role (exact match, no wildcards)", () => {
+  it("lets only this exact repo (by immutable ID) and its dev Environment assume the role", () => {
     template.hasResourceProperties("AWS::IAM::Role", {
       MaxSessionDuration: 3600,
       AssumeRolePolicyDocument: {
@@ -33,7 +34,8 @@ describe("GithubDeployStack", () => {
             Condition: {
               StringEquals: {
                 "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                "token.actions.githubusercontent.com:sub": "repo:ElleDiablo/sundo:environment:dev",
+                "token.actions.githubusercontent.com:sub":
+                  "repo:ElleDiablo@100169794/sundo@1471471072:environment:dev",
               },
             },
           }),

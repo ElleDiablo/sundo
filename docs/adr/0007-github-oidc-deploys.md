@@ -19,7 +19,9 @@ long-lived credential that never expires, skips MFA, and is easy to leak.
 Option 3, defined in the `SundoGithub` stack:
 - An IAM OIDC provider trusts tokens from `token.actions.githubusercontent.com` for audience `sts.amazonaws.com`.
 - Role `sundo-github-deploy-dev` trusts only the exact subject
-  `repo:ElleDiablo/sundo:environment:dev` (no wildcards), with 1-hour sessions.
+  `repo:ElleDiablo@100169794/sundo@1471471072:environment:dev` (no wildcards), with 1-hour sessions.
+  This is GitHub's immutable subject format: the numeric owner and repo IDs mean a repo deleted and
+  recreated under the same name (which happened during this project) can't inherit the trust.
 - The GitHub Environment `dev` accepts only protected branches (`main`), so pull requests and
   forks can never obtain credentials.
 - The role's only permission is `sts:AssumeRole` on the four bootstrap roles.
