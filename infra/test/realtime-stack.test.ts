@@ -44,7 +44,9 @@ describe("RealtimeStack", () => {
       "$default",
       "$disconnect",
       "create_room",
+      "input",
       "join_room",
+      "snapshot",
     ]);
   });
 
