@@ -16,6 +16,7 @@ new WebStack(app, `SundoWeb-${envName}`, { env, envName });
 new GithubDeployStack(app, "SundoGithub", {
   env,
   repo: "ElleDiablo/sundo",
+  oidcSubjectPrefix: "repo:ElleDiablo@100169794/sundo@1471471072",
   githubEnvironment: "dev",
 });
 

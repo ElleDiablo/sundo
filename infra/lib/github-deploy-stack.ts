@@ -3,8 +3,14 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import type { Construct } from "constructs";
 
 export interface GithubDeployStackProps extends StackProps {
-  /** GitHub repository allowed to deploy, as `owner/name`. */
+  /** GitHub repository allowed to deploy, as `owner/name` (used in descriptions only). */
   repo: string;
+  /**
+   * The repo as GitHub writes it in OIDC tokens. GitHub's immutable format adds the owner's and
+   * repo's numeric IDs (`repo:owner@ownerId/name@repoId`), so a deleted-and-recreated repo with the
+   * same name can't match. Check with: gh api repos/<owner>/<name>/actions/oidc/customization/sub
+   */
+  oidcSubjectPrefix: string;
   /** GitHub Environment the deploy job runs in; only that job can assume the role. */
   githubEnvironment: string;
 }
@@ -35,7 +41,7 @@ export class GithubDeployStack extends Stack {
       assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": `repo:${props.repo}:environment:${props.githubEnvironment}`,
+          "token.actions.githubusercontent.com:sub": `${props.oidcSubjectPrefix}:environment:${props.githubEnvironment}`,
         },
       }),
     });
