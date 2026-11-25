@@ -1,0 +1,14 @@
+node_modules/
+dist/
+cdk.out/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# Private notes (separate private repo)
+notes/
+
+# Local assistant context (kept out of the repo)
+CLAUDE.md
