@@ -10,6 +10,7 @@ export {
   type TiledTileset,
 } from "./tiled.ts";
 export {
+  addPlayer,
   createGame,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,

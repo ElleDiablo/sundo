@@ -119,6 +119,39 @@ export function createGame(map: TileMap, spawns: readonly PlayerSpawn[]): GameSt
   return { tick: 0, map, players };
 }
 
+// Adds a player to a running game (someone joined the room). Returns a NEW state, like step().
+// They start on the first free tile among: the spawn tile, then its neighbours to the right,
+// left, below and above, so players who join together don't stand on top of each other.
+// Adding a player who is already in the game changes nothing.
+export function addPlayer(state: GameState, spawn: PlayerSpawn): GameState {
+  // Already here (e.g. a repeated "player_joined" message): keep the state as it is.
+  if (state.players.some((p) => p.id === spawn.id)) return state;
+
+  // Which tiles already have someone standing on them (by their centre's tile).
+  const taken = new Set(state.players.map((p) => `${tileOf(p.x)},${tileOf(p.y)}`));
+  // Candidate tiles, nearest first: the spawn itself, then 1 and 2 tiles away.
+  const offsets = [
+    [0, 0],
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [2, 0],
+    [-2, 0],
+    [1, 1],
+    [-1, 1],
+  ];
+  for (const [dx = 0, dy = 0] of offsets) {
+    const tx = spawn.tileX + dx;
+    const ty = spawn.tileY + dy;
+    if (isWall(state.map, tx, ty) || taken.has(`${tx},${ty}`)) continue;
+    const player = { id: spawn.id, x: tx * UNITS_PER_TILE + 500, y: ty * UNITS_PER_TILE + 500 };
+    // `[...a, b]` is a new array: every old player, then the new one at the end.
+    return { ...state, players: [...state.players, player] };
+  }
+  throw new RangeError(`no free tile near (${spawn.tileX}, ${spawn.tileY}) for player ${spawn.id}`);
+}
+
 // Advances the game by exactly one tick (50 ms of game time).
 // It never edits `state`: it builds a new state and returns it, so the old one stays valid.
 // That's what lets tests compare "before" and "after", and lets a round be replayed exactly.

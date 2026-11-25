@@ -1,5 +1,10 @@
+/**
+ * Tests for the game rules: creating a game, adding players, and step() (speed, walls, sliding,
+ * determinism). Small hand-drawn maps keep each case easy to picture.
+ */
 import { describe, expect, it } from "vitest";
 import {
+  addPlayer,
   createGame,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
@@ -44,6 +49,37 @@ describe("createGame", () => {
 
   it("refuses to spawn a player inside a wall", () => {
     expect(() => createGame(ROOM, [{ id: "a", tileX: 0, tileY: 0 }])).toThrow(/inside a wall/);
+  });
+});
+
+describe("addPlayer", () => {
+  it("puts a newcomer on the spawn tile if it's free", () => {
+    const game = addPlayer(createGame(ROOM, []), { id: "p1", tileX: 5, tileY: 5 });
+    expect(player(game, "p1")).toEqual({ id: "p1", x: 5500, y: 5500 });
+  });
+
+  it("moves newcomers to a free neighbouring tile so nobody stands on someone else", () => {
+    let game = createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }]);
+    game = addPlayer(game, { id: "p1", tileX: 5, tileY: 5 });
+    game = addPlayer(game, { id: "p2", tileX: 5, tileY: 5 });
+    expect(player(game, "p1")).toMatchObject({ x: 6500, y: 5500 }); // to the right
+    expect(player(game, "p2")).toMatchObject({ x: 4500, y: 5500 }); // to the left
+  });
+
+  it("skips walls when looking for a free tile", () => {
+    // Spawn at (1, 1) in the room's corner: right is free, left is the wall.
+    let game = createGame(ROOM, [{ id: "p0", tileX: 1, tileY: 1 }]);
+    game = addPlayer(game, { id: "p1", tileX: 1, tileY: 1 });
+    game = addPlayer(game, { id: "p2", tileX: 1, tileY: 1 });
+    expect(player(game, "p1")).toMatchObject({ x: 2500, y: 1500 });
+    expect(player(game, "p2")).toMatchObject({ x: 1500, y: 2500 }); // below, not into the wall
+  });
+
+  it("ignores a player who is already in the game, and never changes the old state", () => {
+    const before = createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }]);
+    expect(addPlayer(before, { id: "p0", tileX: 2, tileY: 2 })).toBe(before);
+    addPlayer(before, { id: "p1", tileX: 5, tileY: 5 });
+    expect(before.players).toHaveLength(1);
   });
 });
 
