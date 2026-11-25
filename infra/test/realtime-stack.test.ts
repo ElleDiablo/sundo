@@ -35,7 +35,13 @@ describe("RealtimeStack", () => {
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route")).map(
       (r) => (r as { Properties: { RouteKey: string } }).Properties.RouteKey,
     );
-    expect(routes.sort()).toEqual(["$connect", "$default", "$disconnect", "create_room"]);
+    expect(routes.sort()).toEqual([
+      "$connect",
+      "$default",
+      "$disconnect",
+      "create_room",
+      "join_room",
+    ]);
   });
 
   it("throttles the stage so a runaway client can't run up a bill", () => {

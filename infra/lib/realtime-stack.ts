@@ -65,7 +65,9 @@ export class RealtimeStack extends Stack {
       disconnectRouteOptions: { integration: integration("Disconnect") },
       defaultRouteOptions: { integration: integration("Fallback") }, // not "Default": CDK drops that id from names
     });
+    // One route per action the browser sends; all go to the same relay function.
     api.addRoute("create_room", { integration: integration("CreateRoom") });
+    api.addRoute("join_room", { integration: integration("JoinRoom") });
 
     const stage = new apigw.WebSocketStage(this, "Stage", {
       webSocketApi: api,
