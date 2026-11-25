@@ -46,6 +46,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Build the game (the website CDK uploads)
+        run: npm run build -w @sundo/client
+
       - name: CDK synth
         run: npm run synth -w infra
 
@@ -70,6 +73,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Build the game (the website CDK uploads)
+        run: npm run build -w @sundo/client
 
       - name: Sign in to AWS with OIDC (1-hour credentials)
         uses: aws-actions/configure-aws-credentials@v6

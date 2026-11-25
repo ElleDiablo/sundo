@@ -289,7 +289,7 @@ flowchart LR
 sundo/
 ├─ packages/
 │  ├─ engine/     # pure TS game rules, A*, tikbalang state machine (+ Vitest tests)
-│  ├─ client/     # Phaser 3 + Vite; lobby, rendering, input, networking
+│  ├─ client/     # Phaser 4 + Vite (ADR-0008); lobby, rendering, input, networking
 │  ├─ server/     # Lambda handlers (TypeScript): relay, telemetry
 ├─ learner/       # nightly Lambda (Python): compaction + knowledge map + stats
 │  └─ sim/        # Node CLI: round runner, bots, LLM adapters
