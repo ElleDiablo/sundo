@@ -2,6 +2,7 @@ import { App, Tags } from "aws-cdk-lib";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { GithubDeployStack } from "../lib/github-deploy-stack.ts";
+import { RealtimeStack } from "../lib/realtime-stack.ts";
 import { WebStack } from "../lib/web-stack.ts";
 
 /**
@@ -17,7 +18,14 @@ const siteDir = fileURLToPath(new URL("../../packages/client/dist", import.meta.
 if (!existsSync(`${siteDir}/index.html`)) {
   throw new Error(`No client build at ${siteDir}. Run: npm run build -w @sundo/client`);
 }
-new WebStack(app, `SundoWeb-${envName}`, { env, envName, siteDir });
+const realtime = new RealtimeStack(app, `SundoRealtime-${envName}`, { env, envName });
+new WebStack(app, `SundoWeb-${envName}`, {
+  env,
+  envName,
+  siteDir,
+  // The game reads this at startup to find the multiplayer relay.
+  config: { wsUrl: realtime.url },
+});
 
 // Account-level: lets GitHub Actions deploy the `Sundo*-dev` stacks. Deployed by hand only.
 new GithubDeployStack(app, "SundoGithub", {

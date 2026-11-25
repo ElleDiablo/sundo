@@ -9,6 +9,8 @@ export interface WebStackProps extends StackProps {
   envName: string;
   /** Folder to upload as the website: the client's production build (packages/client/dist). */
   siteDir: string;
+  /** Runtime settings for the game, written to /config.json (e.g. the WebSocket address). */
+  config?: Record<string, string>;
 }
 
 /**
@@ -45,7 +47,12 @@ export class WebStack extends Stack {
 
     // Upload the site and clear the CloudFront cache so the new version shows right away.
     new s3deploy.BucketDeployment(this, "DeploySite", {
-      sources: [s3deploy.Source.asset(props.siteDir)],
+      // The build, plus config.json written at deploy time: values like the WebSocket address only
+      // exist once the other stacks are deployed, so they can't be baked into the build.
+      sources: [
+        s3deploy.Source.asset(props.siteDir),
+        ...(props.config ? [s3deploy.Source.jsonData("config.json", props.config)] : []),
+      ],
       destinationBucket: bucket,
       distribution,
       distributionPaths: ["/*"],
