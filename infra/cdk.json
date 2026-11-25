@@ -1,0 +1,6 @@
+{
+  "app": "node bin/sundo.ts",
+  "context": {
+    "@aws-cdk/core:checkSecretUsage": true
+  }
+}
