@@ -21,6 +21,11 @@
         position: fixed;
         inset: 0 0 28px;
       }
+      /* The page's own display rules (e.g. #lobby's grid) would otherwise beat the browser's
+         built-in [hidden] rule, and hidden elements would stay visible. */
+      [hidden] {
+        display: none !important;
+      }
       #lobby {
         position: fixed;
         inset: 0 0 28px;
