@@ -1,6 +1,6 @@
 # Sundo: Game Design Document (GDD)
 
-**Status:** v0.1 draft · **Owner:** Judelle Gaza · **Last updated:** 2026-11-25
+**Status:** v0.2 draft · **Owner:** Judelle Gaza · **Last updated:** 2026-11-25
 
 > **Sundo** (Tagalog: *to fetch, to pick someone up*). During a brownout in a rural barangay,
 > five children are lost in the dark. Work together to bring them home before dawn, while a
@@ -48,13 +48,23 @@ One map, about 48 × 32 tiles of 16 px, viewed from above.
 |---|---|---|
 | **Kapilya plaza** | Candles, the only safe light | Spawn and lobby; the tikbalang can't enter |
 | **Sari-sari store** | Generator hum, one bulb | Small safe zone; battery pickups |
-| **Rice paddies** | Open, wide, moonlit | Fast to cross, but you're easy to spot |
+| **Rice paddies** | Open, wide, moonlit | Walkable only along the narrow dikes: a maze that can be seen across but not cut through; easy to be spotted on |
 | **Bamboo grove** | Dense, dark, creaking | Short-cut, but the tikbalang's home |
 | **Creek and bridge** | Narrow, loud water | Choke point; perfect ambush spot |
 | **Five houses** | Each with a lit doorway | Each child's home (destination) |
 
 A good map has **two or three routes** to each house so players make choices, and those
 choices are what the tikbalang learns from.
+
+**Paddy dikes.** The paddies are water; only the raised dikes between them (1 tile wide) can be
+walked on. Dikes meet at junctions, so crossing the paddies means picking a line through a small
+grid. Two players can't pass each other on a dike, and a tikbalang at a junction blocks it.
+
+**Dogs.** Three or four dogs (*aso*) sleep at fixed spots: by houses, the store and the bridge.
+When the tikbalang passes within 5 tiles of one, it wakes and barks for 3 s, then sleeps again.
+Barking is heard across the map, from the dog's direction, and shown as a small ring at the
+screen edge for players with sound off. Dogs are a second warning besides the hoofbeats, and a
+clue about where the tikbalang is. The tikbalang doesn't hurt them.
 
 ## 5. Characters
 
@@ -78,7 +88,11 @@ Players can't type chat in v1. Emotes are faster, work for bots too and need no 
 
 ### The tikbalang (AI monster, not a player)
 A tall, half-horse spirit known for leading travellers astray.
-- Slightly faster than a player who is escorting (3 tiles/s), slower than one who isn't.
+- Normal speed: slightly faster than a player who is escorting (3 tiles/s), slower than one who isn't (4 tiles/s).
+- **Chase burst:** when it starts a Chase, it sprints at **5 tiles/s for 2 s**, then must rest
+  (walk at 2 tiles/s) for 3 s before it can burst again. No player can simply outrun it: the way
+  out is breaking line of sight, lighting it up, reaching a safe zone or using baliktad. The rest
+  after a burst is the window to escape.
 - Can't enter lit safe zones. Is slowed by flashlight light shone directly at it.
 - **Catching a player** makes them *naligaw* (lost): they're dropped somewhere random in the
   bamboo grove, and any children following them scatter.
@@ -91,7 +105,7 @@ A tall, half-horse spirit known for leading travellers astray.
 | **Patrol** | Walks between points on its knowledge map | Sees a player → Stalk |
 | **Ambush** | Waits hidden at a learned hot spot | Player comes within 4 tiles → Chase |
 | **Stalk** | Follows at a distance, out of the flashlight | Player is alone or slow → Chase |
-| **Chase** | Runs straight at the player | Catch → Patrol; lost sight for 3 s → Patrol |
+| **Chase** | Bursts at the player (5 tiles/s for 2 s), then rests 3 s, then runs at normal speed | Catch → Patrol; lost sight for 3 s → Patrol |
 | **Lured** | Follows a crying child | Child is rescued → Patrol |
 
 ## 6. The learning loop (pillar 3)
@@ -142,7 +156,14 @@ leaderboard compares win rates: humans, Bagito, Beterano, Q-learner, Gemini, Lla
 - **Art:** 16 × 16 pixel art, limited palette (deep blues and greens; warm yellow for safe light).
   Placeholders from **Kenney.nl** (CC0), replaced with original art later.
 - **Lighting:** the whole map is dark, except flashlight cones, safe zones, doorways and lightning flashes.
-- **Sound (CC0 sources):** rain, crickets, the creek, the generator hum, distant hooves.
+  Coloured lights tint the art but are capped, so they never wash it out (the "lit pixel art" look).
+- **Procedural decoration:** the map layout is hand-made (the learning loop needs a fixed map),
+  but grass tufts, flowers, pebbles, fallen leaves and puddles are scattered by seeded rules:
+  never on paths, water or buildings; flowers in clusters; tufts thicker along edges; leaves under
+  trees. The round's seed decides the scatter, so replays look identical.
+- **Layering:** tall things (roofs, walls, fences, bamboo, trees) are sorted by the ground line
+  they stand on, so characters walk behind them, never over or through them.
+- **Sound (CC0 sources):** rain, crickets, the creek, the generator hum, distant hooves, barking dogs.
   Hooves get louder as the tikbalang gets closer, which is the main horror tool.
 - **Accessibility:** no rapid strobing (lightning is a soft fade); hooves also shown as an
   on-screen ring for players with sound off; colour-blind-safe player colours.
