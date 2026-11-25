@@ -4,10 +4,11 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
-import { fileURLToPath } from "node:url";
 
 export interface WebStackProps extends StackProps {
   envName: string;
+  /** Folder to upload as the website: the client's production build (packages/client/dist). */
+  siteDir: string;
 }
 
 /**
@@ -44,7 +45,7 @@ export class WebStack extends Stack {
 
     // Upload the site and clear the CloudFront cache so the new version shows right away.
     new s3deploy.BucketDeployment(this, "DeploySite", {
-      sources: [s3deploy.Source.asset(fileURLToPath(new URL("../site", import.meta.url)))],
+      sources: [s3deploy.Source.asset(props.siteDir)],
       destinationBucket: bucket,
       distribution,
       distributionPaths: ["/*"],

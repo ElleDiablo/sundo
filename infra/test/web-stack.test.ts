@@ -1,5 +1,8 @@
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { WebStack } from "../lib/web-stack.ts";
 
@@ -7,9 +10,13 @@ import { WebStack } from "../lib/web-stack.ts";
 describe("WebStack", () => {
   let template: Template;
   beforeAll(() => {
+    // A throwaway one-page "site", so the test doesn't need the real client build.
+    const siteDir = mkdtempSync(join(tmpdir(), "sundo-site-"));
+    writeFileSync(join(siteDir, "index.html"), "<!doctype html><title>test</title>");
     const app = new App();
     const stack = new WebStack(app, "SundoWeb-test", {
       envName: "dev",
+      siteDir,
       env: { account: "111111111111", region: "ap-southeast-1" },
     });
     template = Template.fromStack(stack);
