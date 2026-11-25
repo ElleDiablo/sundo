@@ -143,7 +143,7 @@ sequenceDiagram
 | Route | From → To | Body | Rate |
 |---|---|---|---|
 | `$connect` / `$disconnect` | any → server | (none) | once |
-| `create_room` | host → server | `{ name, hat, shirt }` | once |
+| `create_room` | host → server → host | `{}` now (`{ name, hat, shirt }` from S2-01); reply `{ type: "room_created", code }` | once |
 | `join` | player → server → host | `{ room, name, hat, shirt }` | once |
 | `input` | player → host | `{ seq, up, down, left, right, light, call, baliktad, emote }` | on change, ≤ 10/s |
 | `snapshot` | host → players | `{ tick, players[], kids[], tikbalang, timeLeft }` | 10/s |
@@ -313,6 +313,12 @@ sundo/
 | `SundoGithub` | GitHub OIDC provider + deploy role (one per account, deployed by hand) |
 
 Decision record: ADR-0002.
+
+**How the game finds the relay:** the WebSocket address only exists after `SundoRealtime` is
+deployed, so it can't be baked into the client build. `SundoWeb` writes it into `config.json`
+next to `index.html` at deploy time (a cross-stack reference), and the game reads that file at
+startup. For local development, `npm run config -w @sundo/client` writes `config.local.json`
+from the stack's output.
 
 ## 10. CI/CD (GitHub Actions)
 
