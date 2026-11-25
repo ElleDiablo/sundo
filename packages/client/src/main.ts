@@ -26,6 +26,10 @@ const game = new Phaser.Game({
   scene: [WorldScene],
 });
 
+// Dev builds only: expose the game so the browser console (and automated two-browser tests) can
+// look inside, e.g. sundo.scene.getScene("world"). Vite removes this block from production builds.
+if (import.meta.env.DEV) (window as unknown as { sundo: Phaser.Game }).sundo = game;
+
 setupLobby((room) => {
   // The world scene is long created by the time anyone clicks a lobby button.
   const world = game.scene.getScene("world") as WorldScene;
@@ -44,13 +48,14 @@ setupLobby((room) => {
         // Show the median, refreshed at most once a second so it's readable.
         const now = performance.now();
         if (now - shownAt > 1000) {
-          setBadgeDetail(`${stats.percentile(0.5)} ms`);
+          setBadgeDetail(`${Math.round(stats.percentile(0.5) ?? 0)} ms`);
           shownAt = now;
         }
         if (measured % 50 === 0) {
           console.info(
-            `round trip (keys → host → snapshot), last 50: median ${stats.percentile(0.5)} ms, ` +
-              `p95 ${stats.percentile(0.95)} ms`,
+            `round trip (keys → host → snapshot), last 50: ` +
+              `median ${Math.round(stats.percentile(0.5) ?? 0)} ms, ` +
+              `p95 ${Math.round(stats.percentile(0.95) ?? 0)} ms`,
           );
         }
       },
