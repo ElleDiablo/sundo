@@ -7,6 +7,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # "Run workflow" button in the Actions tab: re-runs checks + deploy by hand (e.g. if GitHub lost
+  # the push event during an outage). The deploy job still only runs for main.
+  workflow_dispatch:
 
 # Read-only token: CI only needs to check out the code.
 permissions:
@@ -55,7 +58,7 @@ jobs:
   deploy-dev:
     name: deploy dev
     needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # The GitHub Environment `dev` only accepts the protected main branch, and the AWS role
