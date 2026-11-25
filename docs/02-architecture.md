@@ -86,6 +86,11 @@ The engine is **deterministic**: same starting seed + same inputs = same result,
 - **Fixed time step:** 20 ticks per second (50 ms each), regardless of frame rate.
 - **Seeded random numbers:** no `Math.random()` inside the engine.
 - **Pure functions:** `step(state, inputs) → { state, events }`. No DOM, no `fetch`, no clock.
+- **Whole-number positions (fixed-point):** 1 tile = 1000 units. A player moves 200 units per
+  tick (4 tiles/s), or 141 per axis diagonally. Integer maths has no float rounding, so wall
+  collision is exact. The client divides by 1000 only when drawing.
+- **Collision:** each player is a 0.6 × 0.6-tile box. Movement is applied one axis at a time
+  (x, then y), so a blocked diagonal slides along the wall. Outside the map counts as wall.
 
 **Why this matters:**
 1. Bots in the simulator play by *exactly* the same rules as people in the browser.
