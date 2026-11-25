@@ -1,5 +1,16 @@
+/**
+ * The engine's public API: everything other packages (client, server, simulator) may import from
+ * "@sundo/engine". Files not listed here are internal.
+ *
+ * The engine is pure and deterministic (ADR-0004): no clock, no network, no DOM, no Math.random.
+ * The same inputs always give the same game, in the browser, in tests and in the simulator.
+ */
+
+// Seeded random numbers (the only randomness the engine may use).
 export { createRng, type Rng } from "./rng.ts";
+// The tile map: which tiles are walls, and unit/tile conversions.
 export { isWall, mapFromRows, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
+// Reading maps saved by the Tiled editor.
 export {
   findTiledPoint,
   mapFromTiled,
@@ -9,6 +20,7 @@ export {
   type TiledObject,
   type TiledTileset,
 } from "./tiled.ts";
+// Game state and the rules: createGame, addPlayer and the tick function step().
 export {
   addPlayer,
   createGame,

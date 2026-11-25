@@ -1,3 +1,8 @@
+/**
+ * Tests for reading Tiled maps into the engine: which tiles are walls (the `collides` property),
+ * Tiled's flip flags and tileset gid offsets, clear errors for maps the engine can't read, and
+ * finding spawn points.
+ */
 import { describe, expect, it } from "vitest";
 import { findTiledPoint, mapFromTiled, type TiledMap } from "./tiled.ts";
 

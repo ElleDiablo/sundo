@@ -1,3 +1,7 @@
+/**
+ * Tests for the multiplayer relay stack: the TTL table, the WebSocket routes, the throttle, the
+ * Lambda's runtime, and least-privilege IAM (no wildcards).
+ */
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { beforeAll, describe, expect, it } from "vitest";

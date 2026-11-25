@@ -1,3 +1,7 @@
+/**
+ * SundoWeb-<env>: hosts the game website (S3 + CloudFront). Architecture §9.
+ * Uploads the client build plus a config.json with runtime settings (the relay's address).
+ */
 import { CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";

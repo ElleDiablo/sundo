@@ -1,3 +1,7 @@
+/**
+ * SundoRealtime-<env>: the multiplayer relay (ADR-0001). Architecture §4 and §9.
+ * Creates the WebSocket API, the relay Lambda (packages/server) and the sundo-live table.
+ */
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as apigw from "aws-cdk-lib/aws-apigatewayv2";
 import { WebSocketLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
