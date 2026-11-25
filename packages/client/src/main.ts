@@ -3,12 +3,16 @@
  * Phaser scales it up to fit the window with no smoothing (`pixelArt`), so pixels stay square.
  *
  * The world starts running straight away behind the lobby. Once the lobby puts this browser in a
- * room, messages from the relay are passed to the world: the host sees friends appear, and a
- * guest takes control of their own seat's player.
+ * room, this file connects the world to the relay:
+ *   host   player_joined → add the friend; input → their keys; my snapshots → send()
+ *   guest  my keys → send(); snapshot → draw it
+ * A guest also shows the measured round trip (keys → host → snapshot back) in the room badge, and
+ * logs a summary to the console every 50 samples (the number recorded in the S1-05 PR).
  */
 import Phaser from "phaser";
-import { setupLobby, toast } from "./lobby.ts";
-import { onServerMessage } from "./net.ts";
+import { LatencyStats } from "./inputSender.ts";
+import { setBadgeDetail, setupLobby, toast } from "./lobby.ts";
+import { onServerMessage, send } from "./net.ts";
 import { WorldScene } from "./WorldScene.ts";
 
 const game = new Phaser.Game({
@@ -25,13 +29,46 @@ const game = new Phaser.Game({
 setupLobby((room) => {
   // The world scene is long created by the time anyone clicks a lobby button.
   const world = game.scene.getScene("world") as WorldScene;
-  if (room.seat > 0) world.becomeSeat(room.seat); // I joined as a guest
+  if (room.seat === 0) {
+    world.hostRoom((snapshot) => send(room, { action: "snapshot", ...snapshot }));
+  } else {
+    const stats = new LatencyStats();
+    let shownAt = 0;
+    let measured = 0; // samples so far (stats only keeps the last 50)
+    world.becomeGuest(
+      room.seat,
+      (input) => send(room, { action: "input", ...input }),
+      (ms) => {
+        stats.add(ms);
+        measured += 1;
+        // Show the median, refreshed at most once a second so it's readable.
+        const now = performance.now();
+        if (now - shownAt > 1000) {
+          setBadgeDetail(`${stats.percentile(0.5)} ms`);
+          shownAt = now;
+        }
+        if (measured % 50 === 0) {
+          console.info(
+            `round trip (keys → host → snapshot), last 50: median ${stats.percentile(0.5)} ms, ` +
+              `p95 ${stats.percentile(0.95)} ms`,
+          );
+        }
+      },
+    );
+  }
 
   onServerMessage(room, (message) => {
-    if (message.type === "player_joined") {
-      // I'm the host and a friend took a seat: show them in my world.
-      world.addRemotePlayer(message.seat);
-      toast(`Player ${message.seat + 1} joined`);
+    switch (message.type) {
+      case "player_joined": // I'm the host and a friend took a seat: show them in my world.
+        world.addRemotePlayer(message.seat);
+        toast(`Player ${message.seat + 1} joined`);
+        break;
+      case "input": // I'm the host: a guest's keys.
+        world.receiveInput(message.seat, message);
+        break;
+      case "snapshot": // I'm a guest: where everyone is now.
+        world.receiveSnapshot(message);
+        break;
     }
   });
   room.socket.addEventListener("close", () => toast("Disconnected from the room"));

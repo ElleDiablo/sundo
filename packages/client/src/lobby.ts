@@ -49,8 +49,9 @@ export function setupLobby(onRoom: OnRoom): void {
     joinForm.hidden = true;
     enterBtn.hidden = false;
     enterBtn.focus();
-    badge.textContent =
+    badge.dataset["base"] =
       room.seat === 0 ? `Room ${room.code} · host` : `Room ${room.code} · player ${room.seat + 1}`;
+    badge.textContent = badge.dataset["base"];
     onRoom(room);
   }
 
@@ -124,4 +125,11 @@ export function toast(text: string, ms = 3500): void {
   window.setTimeout(() => {
     if (box.textContent === text) box.hidden = true;
   }, ms);
+}
+
+/** Adds a detail after the room badge's text, e.g. "Room BAHO · player 2 · 120 ms". */
+export function setBadgeDetail(detail: string): void {
+  const badge = el<HTMLElement>("room-badge");
+  const base = badge.dataset["base"] ?? "";
+  badge.textContent = detail ? `${base} · ${detail}` : base;
 }

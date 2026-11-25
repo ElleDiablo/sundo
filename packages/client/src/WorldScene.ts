@@ -5,8 +5,14 @@
  * into inputs and draws the engine's state. There is no movement or collision code in here.
  *
  * Players are named by seat: "p0" is the host, "p1"–"p3" are friends who joined (S1-04).
- * For now each browser runs its own world: the host sees friends appear at the spawn, standing
- * still. Sending their movement across the network is S1-05.
+ *
+ * Two modes (ADR-0001, host-authoritative):
+ *   HOST (also playing alone): runs the engine at 20 ticks/s with my keys plus the latest keys
+ *        each guest sent, and every 2nd tick (10/s) sends a snapshot of where everyone is.
+ *   GUEST: runs no engine. Sends my keys to the host (InputSender) and draws the host's snapshots
+ *        ~100 ms in the past, sliding between them (SnapshotBuffer), so motion looks smooth.
+ * A guest sees their own moves after a round trip through the relay (about 100–200 ms). Predicting
+ * my own movement locally to hide that is a later story; it isn't needed to look smooth.
  *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
@@ -28,7 +34,10 @@ import {
   type PlayerState,
   type TiledMap,
 } from "@sundo/engine";
+import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/messages";
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
+import { InputSender } from "./inputSender.ts";
+import { SnapshotBuffer } from "./interpolation.ts";
 
 /** Engine units → screen pixels (1 tile = 1000 units = 16 px). */
 const toPx = (units: number) => (units / UNITS_PER_TILE) * TILE_SIZE_PX;
@@ -47,6 +56,11 @@ const NIGHT_TINT = 0x9ea8d9;
 
 const DEPTH = { ground: 0, decor: 1, objects: 2, player: 10, above: 20, night: 30, glow: 31 };
 
+/** The host sends a snapshot every 2nd tick: 20 ticks/s ÷ 2 = 10 snapshots/s. */
+const TICKS_PER_SNAPSHOT = 2;
+/** Keep the walk animation going this long after a player last moved, so it doesn't flicker. */
+const WALK_HOLD_MS = 120;
+
 type Keys = Record<
   "W" | "A" | "S" | "D" | "UP" | "DOWN" | "LEFT" | "RIGHT",
   Phaser.Input.Keyboard.Key
@@ -62,7 +76,27 @@ export class WorldScene extends Phaser.Scene {
   private localId = playerId(0);
   /** One sprite per player id. */
   private sprites = new Map<string, Phaser.GameObjects.Sprite>();
+  /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
+  private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
+
+  // ── Host side ──
+  /** The latest keys each guest sent, by seat, with the seq they came in (older ones are ignored). */
+  private remote = new Map<number, InputFields>();
+  /** How to send a snapshot to the guests, once I host a room that has guests. */
+  private sendSnapshot: ((snapshot: SnapshotFields) => void) | undefined;
+
+  // ── Guest side ──
+  /** Set once I join someone's room: from then on the host's snapshots are what I draw. */
+  private guest:
+    | {
+        readonly seat: number;
+        readonly sender: InputSender;
+        readonly buffer: SnapshotBuffer;
+        readonly sendInput: (input: InputFields) => void;
+        readonly onRoundTrip: (ms: number) => void;
+      }
+    | undefined;
 
   constructor() {
     super("world");
@@ -100,8 +134,7 @@ export class WorldScene extends Phaser.Scene {
       frameRate: 8,
       repeat: -1,
     });
-    this.syncSprites();
-    this.drawPlayers(1);
+    this.draw(this.state.players, 0);
 
     // 4. Night: multiply the whole screen by a cool moonlight colour, then add warm glows on top
     //    where the map's "lights" layer has a point (doorways, windows, the store's candle).
@@ -123,9 +156,8 @@ export class WorldScene extends Phaser.Scene {
       );
     }
 
-    // 5. Camera: never show outside the map; follow whoever this browser controls.
+    // 5. Camera: never show outside the map. (It follows my player: see addSprite.)
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
-    this.followLocal();
 
     // 6. Keyboard: WASD and the arrow keys.
     const keyboard = this.input.keyboard;
@@ -134,42 +166,108 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * A guest joined my room (I'm the host): add them to my world at the spawn.
-   * They stand still for now; their movement arrives in S1-05.
+   * I host a room: from now on send a snapshot to my guests 10 times a second (once there are any).
    */
+  hostRoom(sendSnapshot: (snapshot: SnapshotFields) => void): void {
+    this.sendSnapshot = sendSnapshot;
+  }
+
+  /** A guest joined my room (I'm the host): add them to my world next to the spawn. */
   addRemotePlayer(seat: number): void {
     this.state = addPlayer(this.state, { id: playerId(seat), ...this.spawn });
     this.previous = this.state;
-    this.syncSprites();
-    this.drawPlayers(1);
+  }
+
+  /** A guest's keys arrived (I'm the host). Kept until newer ones come; late, older ones are ignored. */
+  receiveInput(seat: number, input: InputFields): void {
+    const known = this.remote.get(seat);
+    if (known && input.seq <= known.seq) return;
+    this.remote.set(seat, input);
   }
 
   /**
-   * I joined someone else's room in this seat: from now on this browser controls that player.
-   * (My own world is rebuilt around the new id; showing the host's world is S1-05.)
+   * I joined someone else's room in this seat. My own engine stops: from now on the host's
+   * snapshots decide where everyone is, and my keys are sent to the host instead.
    */
-  becomeSeat(seat: number): void {
+  becomeGuest(
+    seat: number,
+    sendInput: (input: InputFields) => void,
+    onRoundTrip: (ms: number) => void,
+  ): void {
     this.localId = playerId(seat);
-    this.state = createGame(this.state.map, [{ id: this.localId, ...this.spawn }]);
-    this.previous = this.state;
-    this.syncSprites();
-    this.followLocal();
-    this.drawPlayers(1);
+    this.guest = {
+      seat,
+      sender: new InputSender(),
+      buffer: new SnapshotBuffer(),
+      sendInput,
+      onRoundTrip,
+    };
+    // Nobody is drawn until the first snapshot arrives (a fraction of a second).
+    this.draw([], performance.now());
+  }
+
+  /** A snapshot arrived from the host (I'm a guest). */
+  receiveSnapshot(snapshot: SnapshotFields): void {
+    const guest = this.guest;
+    if (!guest) return;
+    const now = performance.now();
+    if (!guest.buffer.push(snapshot, now)) return; // out of order or repeated
+    // The host has applied my inputs up to this seq: how long did that take?
+    const ms = guest.sender.acked(snapshot.acks[guest.seat] ?? 0, now);
+    if (ms !== undefined) guest.onRoundTrip(ms);
   }
 
   /** Phaser calls this every screen frame; `delta` is the real time since the last frame in ms. */
   override update(time: number, delta: number): void {
-    const { ticks, alpha } = advance(this.clock, delta);
-    const input = this.readInput();
-    for (let i = 0; i < ticks; i++) {
-      this.previous = this.state;
-      // Only my own player gets keys; everyone else stands still until S1-05.
-      this.state = step(this.state, { [this.localId]: input }).state;
-    }
-    this.drawPlayers(alpha);
-    this.animatePlayers(input);
+    const now = performance.now();
+    if (this.guest) this.updateGuest(this.guest, now);
+    else this.updateHost(delta, now);
     // Candles flicker a little (each one slightly out of step with the others).
     this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
+  }
+
+  /** Host (or alone): run the engine on everyone's keys; send a snapshot every 2nd tick. */
+  private updateHost(delta: number, now: number): void {
+    const { ticks, alpha } = advance(this.clock, delta);
+    const inputs: Record<string, MoveInput> = { [this.localId]: this.readInput() };
+    for (const [seat, input] of this.remote) inputs[playerId(seat)] = input;
+
+    for (let i = 0; i < ticks; i++) {
+      this.previous = this.state;
+      this.state = step(this.state, inputs).state;
+      if (this.state.tick % TICKS_PER_SNAPSHOT === 0) this.broadcast();
+    }
+
+    // Draw everyone part-way between the last two ticks (alpha 0 = previous, 1 = current).
+    const drawn = this.state.players.map((p) => {
+      const before = this.find(this.previous, p.id) ?? p;
+      return {
+        id: p.id,
+        x: before.x + (p.x - before.x) * alpha,
+        y: before.y + (p.y - before.y) * alpha,
+      };
+    });
+    this.draw(drawn, now);
+  }
+
+  /** Sends the current state to the guests, if I'm hosting a room that has any. */
+  private broadcast(): void {
+    if (!this.sendSnapshot || this.state.players.length < 2) return;
+    // acks[seat] = the last input seq from that seat that this state includes.
+    const acks = [0, 1, 2, 3].map((seat) => this.remote.get(seat)?.seq ?? 0);
+    this.sendSnapshot({
+      tick: this.state.tick,
+      players: this.state.players.map(({ id, x, y }) => ({ id, x, y })),
+      acks,
+    });
+  }
+
+  /** Guest: send my keys when they change; draw the host's world ~100 ms in the past. */
+  private updateGuest(guest: NonNullable<WorldScene["guest"]>, now: number): void {
+    const message = guest.sender.update(this.readInput(), now);
+    if (message) guest.sendInput(message);
+    const players = guest.buffer.sample(now);
+    if (players) this.draw(players, now);
   }
 
   private readInput(): MoveInput {
@@ -182,63 +280,57 @@ export class WorldScene extends Phaser.Scene {
     };
   }
 
-  /** Makes sure there is exactly one sprite per player in the engine's state. */
-  private syncSprites(): void {
-    const ids = new Set(this.state.players.map((p) => p.id));
+  /**
+   * Draws these players (positions in engine units, possibly fractional) and nobody else: adds
+   * sprites for newcomers, removes sprites of players who are gone, and walks or idles each one.
+   * Both modes end here, so host and guests draw players exactly the same way.
+   */
+  private draw(players: readonly SnapshotPlayer[], now: number): void {
+    const ids = new Set(players.map((p) => p.id));
     for (const [id, sprite] of this.sprites) {
-      if (!ids.has(id)) {
-        sprite.destroy();
-        this.sprites.delete(id);
-      }
+      if (ids.has(id)) continue;
+      sprite.destroy();
+      this.sprites.delete(id);
+      this.motion.delete(id);
     }
-    for (const p of this.state.players) {
-      if (this.sprites.has(p.id)) continue;
-      const seat = Number(p.id.slice(1)) || 0;
-      // Origin (0.5, 1) = bottom-centre, so (x, y) is where the feet are.
-      const sprite = this.add
-        .sprite(0, 0, "tanod", 0)
-        .setOrigin(0.5, 1)
-        .setDepth(DEPTH.player)
-        .setTint(SEAT_TINTS[seat % SEAT_TINTS.length] ?? 0xffffff);
-      this.sprites.set(p.id, sprite);
-    }
-  }
 
-  /** Points the camera at the player this browser controls. */
-  private followLocal(): void {
-    const me = this.sprites.get(this.localId);
-    if (me) this.cameras.main.startFollow(me, true);
-  }
-
-  /** Draws every player part-way between the last two ticks (alpha 0 = previous, 1 = current). */
-  private drawPlayers(alpha: number): void {
-    for (const now of this.state.players) {
-      const sprite = this.sprites.get(now.id);
-      if (!sprite) continue;
-      const before = this.find(this.previous, now.id) ?? now;
+    for (const p of players) {
+      const sprite = this.sprites.get(p.id) ?? this.addSprite(p.id);
       // The collision box centre is the "feet" position; draw the sprite standing on it.
-      const x = toPx(before.x + (now.x - before.x) * alpha);
-      const y = toPx(before.y + (now.y - before.y) * alpha) + 4;
+      const x = toPx(p.x);
+      const y = toPx(p.y) + 4;
       sprite.setPosition(Math.round(x), Math.round(y));
       // Lower on screen = nearer the viewer: draw players further down in front of the others.
       sprite.setDepth(DEPTH.player + y / 10_000);
-    }
-  }
 
-  /** Walks a sprite while its player actually moved this tick; my sprite faces the keys I hold. */
-  private animatePlayers(input: MoveInput): void {
-    for (const now of this.state.players) {
-      const sprite = this.sprites.get(now.id);
-      const before = this.find(this.previous, now.id);
-      if (!sprite) continue;
-      const moving = !!before && (now.x !== before.x || now.y !== before.y);
-      if (moving) sprite.anims.play("tanod-walk", true);
-      else {
+      // Walking or standing, and which way to face, from how far they moved since the last frame.
+      // This works the same for my player and for players whose keys I never see.
+      const last = this.motion.get(p.id);
+      const dx = last ? p.x - last.x : 0;
+      const moved = !!last && (dx !== 0 || p.y !== last.y);
+      const movedAt = moved ? now : (last?.movedAt ?? -Infinity);
+      this.motion.set(p.id, { x: p.x, y: p.y, movedAt });
+      if (dx !== 0) sprite.setFlipX(dx < 0);
+      if (now - movedAt < WALK_HOLD_MS) sprite.anims.play("tanod-walk", true);
+      else if (sprite.anims.isPlaying) {
         sprite.anims.stop();
         sprite.setFrame(0);
       }
-      if (now.id === this.localId && input.left !== input.right) sprite.setFlipX(input.left);
     }
+  }
+
+  /** Makes a sprite for a player, tinted by seat; the camera follows it if it's mine. */
+  private addSprite(id: string): Phaser.GameObjects.Sprite {
+    const seat = Number(id.slice(1)) || 0;
+    // Origin (0.5, 1) = bottom-centre, so (x, y) is where the feet are.
+    const sprite = this.add
+      .sprite(0, 0, "tanod", 0)
+      .setOrigin(0.5, 1)
+      .setDepth(DEPTH.player)
+      .setTint(SEAT_TINTS[seat % SEAT_TINTS.length] ?? 0xffffff);
+    this.sprites.set(id, sprite);
+    if (id === this.localId) this.cameras.main.startFollow(sprite, true);
+    return sprite;
   }
 
   private find(state: GameState, id: string): PlayerState | undefined {
