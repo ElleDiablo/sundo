@@ -1,6 +1,15 @@
 export { createRng, type Rng } from "./rng.ts";
 export { isWall, mapFromRows, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
 export {
+  findTiledPoint,
+  mapFromTiled,
+  TILE_SIZE_PX,
+  type TiledLayer,
+  type TiledMap,
+  type TiledObject,
+  type TiledTileset,
+} from "./tiled.ts";
+export {
   createGame,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
