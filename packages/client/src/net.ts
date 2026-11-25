@@ -7,7 +7,8 @@
  *   - local dev: config.local.json, written by `npm run config -w @sundo/client` (git-ignored)
  *
  * Both createRoom and joinRoom open a socket, send one request and wait for the matching reply.
- * The socket then stays open: it's the line the host and guests talk over from now on.
+ * The socket then stays open: it's the line the host and guests talk over from now on
+ * (send() for inputs and snapshots, onServerMessage() for what comes back).
  */
 import { parseServerMessage, type ClientMessage, type ServerMessage } from "@sundo/server/messages";
 
@@ -96,4 +97,9 @@ export function onServerMessage(room: Room, handler: (message: ServerMessage) =>
     const message = parseServerMessage(String(event.data));
     if (message) handler(message);
   });
+}
+
+/** Sends a message on the room's socket. Dropped silently if the socket has closed. */
+export function send(room: Room, message: ClientMessage): void {
+  if (room.socket.readyState === WebSocket.OPEN) room.socket.send(JSON.stringify(message));
 }

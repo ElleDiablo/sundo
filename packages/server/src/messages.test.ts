@@ -3,7 +3,7 @@
  * (never trusted, never a crash).
  */
 import { describe, expect, it } from "vitest";
-import { parseServerMessage, readJoinCode } from "./messages.ts";
+import { parseServerMessage, readInputBody, readJoinCode, readSnapshotBody } from "./messages.ts";
 
 describe("parseServerMessage", () => {
   it("reads every message the relay sends", () => {
@@ -58,5 +58,55 @@ describe("readJoinCode", () => {
     expect(readJoinCode('{"action":"join_room"}')).toBeUndefined();
     expect(readJoinCode("not json")).toBeUndefined();
     expect(readJoinCode(undefined)).toBeUndefined();
+  });
+});
+
+describe("input and snapshot messages", () => {
+  const snapshot = { tick: 40, players: [{ id: "p0", x: 1500, y: -20 }], acks: [0, 3] };
+
+  it("reads valid ones, both from a browser and from the relay", () => {
+    const input = { seq: 7, up: true, down: false, left: false, right: false };
+    expect(readInputBody(JSON.stringify({ action: "input", ...input }))).toEqual(input);
+    expect(parseServerMessage(JSON.stringify({ type: "input", seat: 2, ...input }))).toEqual({
+      type: "input",
+      seat: 2,
+      ...input,
+    });
+    expect(readSnapshotBody(JSON.stringify({ action: "snapshot", ...snapshot }))).toEqual(snapshot);
+    expect(parseServerMessage(JSON.stringify({ type: "snapshot", ...snapshot }))).toEqual({
+      type: "snapshot",
+      ...snapshot,
+    });
+  });
+
+  it("drops fields it doesn't know instead of passing them on", () => {
+    const sneaky = { ...snapshot, players: [{ id: "p0", x: 1, y: 2, admin: true }], extra: "x" };
+    expect(readSnapshotBody(JSON.stringify(sneaky))).toEqual({
+      ...snapshot,
+      players: [{ id: "p0", x: 1, y: 2 }],
+    });
+  });
+
+  it("rejects missing, wrong-typed or absurd values", () => {
+    for (const body of [
+      '{"seq":1,"up":true,"down":false,"left":false}', // a key missing
+      '{"seq":1.5,"up":true,"down":false,"left":false,"right":false}',
+      '{"seq":-1,"up":true,"down":false,"left":false,"right":false}',
+      '{"seq":1,"up":"yes","down":false,"left":false,"right":false}',
+      "[]",
+    ]) {
+      expect(readInputBody(body), body).toBeUndefined();
+    }
+    const five = Array.from({ length: 5 }, (_, i) => ({ id: `p${i}`, x: 0, y: 0 }));
+    for (const bad of [
+      { ...snapshot, tick: -1 },
+      { ...snapshot, players: five }, // more players than seats
+      { ...snapshot, players: [{ id: "p0", x: 1e12, y: 0 }] },
+      { ...snapshot, players: [{ id: "a-very-long-id", x: 0, y: 0 }] },
+      { ...snapshot, acks: [1, 2, 3, 4, 5] },
+      { ...snapshot, acks: "none" },
+    ]) {
+      expect(readSnapshotBody(JSON.stringify(bad)), JSON.stringify(bad)).toBeUndefined();
+    }
   });
 });

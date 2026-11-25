@@ -72,13 +72,17 @@ export class RealtimeStack extends Stack {
     // One route per action the browser sends; all go to the same relay function.
     api.addRoute("create_room", { integration: integration("CreateRoom") });
     api.addRoute("join_room", { integration: integration("JoinRoom") });
+    // S1-05: the in-game traffic. Guests' keys go to the host; the host's snapshots go to guests.
+    api.addRoute("input", { integration: integration("Input") });
+    api.addRoute("snapshot", { integration: integration("Snapshot") });
 
     const stage = new apigw.WebSocketStage(this, "Stage", {
       webSocketApi: api,
       stageName: props.envName,
       autoDeploy: true,
       // Caps how many messages per second the whole API accepts, so a runaway client
-      // can't run up a bill. A 4-player room sends about 30 messages/s.
+      // can't run up a bill. A full 4-player room sends about 40 messages/s: 10 snapshots from the
+      // host plus up to 10 inputs from each of 3 guests (less in practice: only when keys change).
       throttle: { rateLimit: 100, burstLimit: 200 },
     });
     // Let the relay send replies to connected browsers (postToConnection), on this API only.

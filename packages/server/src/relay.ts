@@ -7,11 +7,24 @@
  *   create_room  {"action":"create_room"}             → make a room; host gets room_created
  *   join_room    {"action":"join_room","code":"BAHO"} → take a seat; guest gets room_joined,
  *                                                       host gets player_joined
+ *   input        {"action":"input","seq":7,"up":true,…} → passed to the host, with the guest's seat
+ *   snapshot     {"action":"snapshot","tick":120,…}     → passed from the host to every guest
  *   $default     anything else                         → reply with an error
  * Which route runs is decided by the message's "action" field (the API's route selection).
+ *
+ * input and snapshot are the busy routes (up to ~40 messages a second in a full room), so a bad
+ * message there is logged and dropped instead of answered: replying would double the traffic.
  */
-import { readJoinCode, type ServerMessage } from "./messages.ts";
-import { createRoom, joinRoom, RoomError, type RoomStore } from "./rooms.ts";
+import { readInputBody, readJoinCode, readSnapshotBody, type ServerMessage } from "./messages.ts";
+import {
+  createRoom,
+  findGuests,
+  findHost,
+  findMembership,
+  joinRoom,
+  RoomError,
+  type RoomStore,
+} from "./rooms.ts";
 
 export type { ServerMessage };
 
@@ -87,6 +100,32 @@ export async function handleRoute(
       return OK;
     }
 
+    case "input": {
+      const input = readInputBody(body);
+      if (!input) return dropped(deps, "input", connectionId);
+      // Which seat sent this is looked up from the connection, never read from the message:
+      // a guest can't move someone else's player by writing a different seat number.
+      const me = await findMembership(deps.store, connectionId);
+      if (!me || me.seat === 0) return dropped(deps, "input from a non-guest", connectionId);
+      const host = await findHost(deps.store, me.code);
+      if (!host) return dropped(deps, "input for a closed room", connectionId);
+      await trySend(deps, host, { type: "input", seat: me.seat, ...input });
+      return OK;
+    }
+
+    case "snapshot": {
+      const snapshot = readSnapshotBody(body);
+      if (!snapshot) return dropped(deps, "snapshot", connectionId);
+      // Only the host (seat 0) decides where everyone is.
+      const me = await findMembership(deps.store, connectionId);
+      if (!me || me.seat !== 0) return dropped(deps, "snapshot from a non-host", connectionId);
+      const guests = await findGuests(deps.store, me.code);
+      // Send to every guest at once. One closed tab must not stop the others getting theirs.
+      const message: ServerMessage = { type: "snapshot", ...snapshot };
+      await Promise.all(guests.map((guest) => trySend(deps, guest, message)));
+      return OK;
+    }
+
     default: {
       const action = parseAction(body);
       await deps.sender.send(connectionId, {
@@ -96,6 +135,21 @@ export async function handleRoute(
       return OK;
     }
   }
+}
+
+/** Sends a message; if the browser is gone (tab closed), logs it instead of failing the request. */
+async function trySend(deps: RelayDeps, connectionId: string, message: ServerMessage) {
+  try {
+    await deps.sender.send(connectionId, message);
+  } catch (error) {
+    deps.log?.(`could not send ${message.type} to ${connectionId}: ${String(error)}`);
+  }
+}
+
+/** Logs a message that was ignored and answers 200 (the browser isn't waiting for a reply). */
+function dropped(deps: RelayDeps, what: string, connectionId: string): RelayResult {
+  deps.log?.(`dropped ${what} from ${connectionId}`);
+  return OK;
 }
 
 /** Reads the "action" field of a message, or undefined if it isn't JSON with one. */

@@ -146,14 +146,24 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}` now (`{ name, hat, shirt }` from S2-01); reply `{ type: "room_created", code }` | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` | once |
 | `join` | player → server → host | `{ room, name, hat, shirt }` | once |
-| `input` | player → host | `{ seq, up, down, left, right, light, call, baliktad, emote }` | on change, ≤ 10/s |
-| `snapshot` | host → players | `{ tick, players[], kids[], tikbalang, timeLeft }` | 10/s |
+| `input` | guest → server → host | `{ seq, up, down, left, right }` now (`light, call, baliktad, emote` later); the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 10/s (every 2nd tick) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
 **Smoothing:** players see the world ~100 ms in the past and blend between the last two
 snapshots. That hides network jitter. It's the standard technique in multiplayer games
-(called **snapshot interpolation**).
+(called **snapshot interpolation**). Snapshots are timed by their `tick` (tick × 50 ms of host
+game time), not by when they arrive; late or repeated ones are ignored.
+
+**Ordering:** each message is a separate Lambda call, and two calls can finish out of order.
+So inputs carry an increasing `seq` and snapshots a `tick`; receivers drop anything older than
+what they already have. `acks[seat]` in a snapshot is the last input `seq` the host applied for
+that seat, which lets a guest measure the full round trip (keys → host → snapshot back).
+
+**Trust:** the relay never takes a seat number from a message. It looks up the sender's seat from
+its connection (`CONN#<id>`), so a guest can't steer another player or send snapshots. Every
+field is validated and unknown fields are dropped before anything is forwarded.
 
 ---
 
