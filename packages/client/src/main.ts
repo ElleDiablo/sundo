@@ -3,6 +3,7 @@
  * Phaser scales it up to fit the window with no smoothing (`pixelArt`), so pixels stay square.
  */
 import Phaser from "phaser";
+import { setupLobby } from "./lobby.ts";
 import { WorldScene } from "./WorldScene.ts";
 
 new Phaser.Game({
@@ -14,4 +15,9 @@ new Phaser.Game({
   backgroundColor: "#0b0e16",
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   scene: [WorldScene],
+});
+
+// The lobby sits on top of the running world. Keep the room's socket open for joining (S1-04).
+setupLobby((room) => {
+  room.socket.addEventListener("close", () => console.info(`room ${room.code}: connection closed`));
 });

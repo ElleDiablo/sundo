@@ -12,3 +12,6 @@ notes/
 
 # Local assistant context (kept out of the repo)
 CLAUDE.md
+
+# Local dev settings (my AWS account)
+packages/client/public/config.local.json
