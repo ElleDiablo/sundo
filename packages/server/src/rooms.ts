@@ -8,7 +8,7 @@
  *   ROOM#BAHO     CONN#<connId>    a player in the room and their seat
  *   CONN#<connId> ROOM             which room a connection is in (to clean up on disconnect)
  *
- * The keys match the only questions the relay asks: "who's in room X?" (query PK = ROOM#X),
+ * The keys match the only questions the relay asks: "who's in room X?" (query SEAT# items of ROOM#X),
  * "which room is connection Y in?" (get PK = CONN#Y) and "is seat N free?" (get SEAT#N).
  * That's how DynamoDB tables are designed: around the lookups, not around the data.
  */
@@ -51,6 +51,8 @@ export interface RoomStore {
   get(key: Key): Promise<Item | undefined>;
   /** Applies every step or none. Never partly written. */
   transact(ops: readonly WriteOp[]): Promise<TransactResult>;
+  /** Every item with this PK whose SK starts with `skPrefix`, e.g. all SEAT# items of a room. */
+  query(pk: string, skPrefix: string): Promise<Item[]>;
 }
 
 export interface CreatedRoom {
@@ -187,4 +189,32 @@ function seatOps(
       item: { PK: `CONN#${connectionId}`, SK: "ROOM", room: code, seat, ttl },
     },
   ];
+}
+
+/** Where a connection is: its room and seat, or undefined if it isn't in a room. */
+export interface Membership {
+  readonly code: string;
+  readonly seat: number;
+}
+
+/** Looks up which room and seat a connection is in (the CONN#<id> / ROOM item). */
+export async function findMembership(
+  store: RoomStore,
+  connectionId: string,
+): Promise<Membership | undefined> {
+  const item = await store.get({ PK: `CONN#${connectionId}`, SK: "ROOM" });
+  if (!item) return undefined;
+  return { code: String(item["room"]), seat: Number(item["seat"]) };
+}
+
+/** The host's connection for a room, or undefined if the room is gone. */
+export async function findHost(store: RoomStore, code: string): Promise<string | undefined> {
+  const meta = await store.get({ PK: `ROOM#${code}`, SK: "META" });
+  return meta ? String(meta["hostConnId"]) : undefined;
+}
+
+/** The connections of everyone in a room except the host (seats 1–3), from its SEAT# items. */
+export async function findGuests(store: RoomStore, code: string): Promise<string[]> {
+  const seats = await store.query(`ROOM#${code}`, "SEAT#");
+  return seats.filter((s) => s.SK !== "SEAT#0").map((s) => String(s["connId"]));
 }

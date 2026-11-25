@@ -2,7 +2,8 @@
  * An in-memory stand-in for DynamoDB, for tests.
  *
  * It follows the same rules as the real table for the operations the relay uses: `get` reads one
- * item, and `transact` checks every condition first and then writes everything or nothing.
+ * item, `transact` checks every condition first and then writes everything or nothing, and
+ * `query` returns one partition's items whose sort key starts with a prefix, sorted by sort key.
  * That way the room logic is tested against the behaviour it relies on, without AWS.
  */
 import type { Item, Key, RoomStore, TransactResult, WriteOp } from "./rooms.ts";
@@ -26,6 +27,13 @@ export class FakeStore implements RoomStore {
     // Phase 2: all conditions passed, so write every item.
     for (const op of ops) if (op.kind === "put") this.items.set(id(op.item), op.item);
     return { ok: true };
+  }
+
+  async query(pk: string, skPrefix: string): Promise<Item[]> {
+    // DynamoDB returns a partition's items sorted by SK; do the same.
+    return [...this.items.values()]
+      .filter((item) => item.PK === pk && item.SK.startsWith(skPrefix))
+      .sort((a, b) => (a.SK < b.SK ? -1 : a.SK > b.SK ? 1 : 0));
   }
 }
 
