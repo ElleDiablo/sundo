@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
-    "assets": "node scripts/make-placeholder-assets.ts"
+    "assets": "node scripts/make-assets.ts"
   },
   "dependencies": {
     "@sundo/engine": "*",
