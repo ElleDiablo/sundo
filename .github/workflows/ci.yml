@@ -1,5 +1,5 @@
-# CI: runs on every pull request to main (and on main itself after a merge).
-# No AWS credentials here: `cdk synth` only builds CloudFormation templates locally.
+# CI/CD: checks every pull request to main; after a merge, checks main again and deploys dev.
+# No stored AWS keys anywhere: the deploy job signs in with GitHub OIDC (ADR-0007).
 name: CI
 
 on:
@@ -13,9 +13,10 @@ permissions:
   contents: read
 
 # A new push to the same PR cancels the older, now-pointless run.
+# Runs on main are never cancelled, so a deploy is never cut off halfway.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -47,3 +48,36 @@ jobs:
 
       - name: CDK synth
         run: npm run synth -w infra
+
+  deploy-dev:
+    name: deploy dev
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The GitHub Environment `dev` only accepts the protected main branch, and the AWS role
+    # only trusts jobs in this Environment.
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write # lets the job ask GitHub for an OIDC token
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sign in to AWS with OIDC (1-hour credentials)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: sundo-dev-${{ github.run_id }}
+          aws-region: ap-southeast-1
+          mask-aws-account-id: true
+
+      - name: Deploy every dev stack
+        run: npm run cdk -w infra -- deploy 'Sundo*-dev' --require-approval never

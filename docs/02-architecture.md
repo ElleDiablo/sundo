@@ -305,6 +305,7 @@ sundo/
 | `SundoData-<env>` | Events bucket (raw + curated prefixes), Glue database + 2 tables, Athena workgroup |
 | `SundoLearn-<env>` | Scheduler, learner Lambda, knowledge/stats prefixes |
 | `SundoOps-<env>` | Budget alarm, CloudWatch alarms, dashboard |
+| `SundoGithub` | GitHub OIDC provider + deploy role (one per account, deployed by hand) |
 
 Decision record: ADR-0002.
 
@@ -318,8 +319,10 @@ flowchart LR
     TAG[Tag v*.*.*] --> PROD[Deploy to prod]
 ```
 
-- GitHub signs in to AWS with **OIDC**: short-lived credentials, **no stored access keys**.
-- The deploy role can only deploy Sundo's CloudFormation stacks.
+- GitHub signs in to AWS with **OIDC**: 1-hour credentials, **no stored access keys** (ADR-0007).
+- Only a job in this repo's `dev` GitHub Environment (protected `main` only) can assume the
+  deploy role, and that role can only assume the CDK bootstrap roles.
+- CI deploys `Sundo*-dev` stacks; the `SundoGithub` stack (OIDC provider + role) is deployed by hand.
 
 ---
 

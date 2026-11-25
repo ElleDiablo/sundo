@@ -13,5 +13,6 @@ changes, write a new ADR that **supersedes** the old one.
 | [0004](0004-shared-deterministic-engine.md) | One deterministic engine shared by browser, simulator and tests | Accepted |
 | [0005](0005-emotes-not-chat.md) | Emotes only, no free-text chat | Accepted |
 | [0006](0006-s3-direct-writes-nightly-compaction.md) | Write raw events straight to S3; compact to Parquet nightly | Accepted |
+| [0007](0007-github-oidc-deploys.md) | GitHub Actions deploys with OIDC through the CDK bootstrap roles | Accepted |
 
 Template: copy `0000-template.md`.
