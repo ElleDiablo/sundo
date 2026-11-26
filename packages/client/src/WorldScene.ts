@@ -25,7 +25,7 @@
  * points, chosen with the seeded generator (the host picks the seed). The host draws them from
  * its engine; guests from snapshots (`kids`), slid between snapshots like players.
  *
- * Escorting (S2-03): holding E near a lost child makes it follow me; a hint ("Tala · E") shows
+ * Escorting (S2-03): holding E near a lost child makes it follow me; a hint ("Tala [E]") shows
  * over the nearest one in reach. A guest predicts its own line too (Predictor gets the kids), so
  * calling and leading feel instant. The page hears about it through the scene event "escort".
  *
@@ -83,6 +83,7 @@ import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
 import { KID_NAMES, kidRow } from "./kids.ts";
 import { EMOTE_HOLD_MS, emoteText } from "./emotes.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
+import { INK, pixelTextStyle, placeCentred } from "./pixelText.ts";
 import { Predictor } from "./prediction.ts";
 
 /** Engine units → screen pixels (1 tile = 1000 units = 16 px). */
@@ -161,7 +162,7 @@ export class WorldScene extends Phaser.Scene {
   private emoteKey: { emote: number; until: number } | undefined;
   /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
   private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
-  /** "Tala · E" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
+  /** "Tala [E]" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
   private callHint!: Phaser.GameObjects.Text;
   /** Children following me last frame, to notice a new one (for the "escort" event). */
   private myEscort = new Set<string>();
@@ -312,15 +313,8 @@ export class WorldScene extends Phaser.Scene {
 
     // The call hint: tiny text, drawn above the night tint so it stays readable in the dark.
     this.callHint = this.add
-      .text(0, 0, "", {
-        fontFamily: "monospace",
-        fontSize: "8px",
-        color: "#f0a24a",
-        backgroundColor: "#0b0e16cc",
-        padding: { x: 2, y: 1 },
-        resolution: 4, // sharper text when the canvas is scaled up
-      })
-      .setOrigin(0.5, 1)
+      .text(0, 0, "", pixelTextStyle(INK.amber, INK.night)) // pixel font: see pixelText.ts
+      .setOrigin(0, 1) // bottom-left; placeCentred() centres it on whole pixels
       .setDepth(DEPTH.glow + 1)
       .setVisible(false);
 
@@ -750,19 +744,12 @@ export class WorldScene extends Phaser.Scene {
     }
     if (!bubble) {
       bubble = this.add
-        .text(0, 0, "", {
-          fontFamily: "monospace",
-          fontSize: "8px",
-          color: "#0b0e16",
-          backgroundColor: "#ddd7c6",
-          padding: { x: 3, y: 2 },
-          resolution: 4, // sharper text when the canvas is scaled up
-        })
-        .setOrigin(0.5, 1)
+        .text(0, 0, "", pixelTextStyle(INK.night, INK.parchment)) // dark on paper, like a sign
+        .setOrigin(0, 1) // bottom-left; placeCentred() centres it on whole pixels
         .setDepth(DEPTH.glow + 2);
       this.bubbles.set(id, bubble);
     }
-    bubble.setText(text).setPosition(x, y).setVisible(true);
+    placeCentred(bubble.setText(text), x, y).setVisible(true);
   }
 
   /**
@@ -837,8 +824,8 @@ export class WorldScene extends Phaser.Scene {
       : undefined;
     this.callHint.setVisible(!!lost && this.controlsOn);
     if (lost) {
-      this.callHint.setText(`${KID_NAMES[kidRow(lost.id)]} · E`);
-      this.callHint.setPosition(Math.round(toPx(lost.x)), Math.round(toPx(lost.y)) - 22);
+      this.callHint.setText(`${KID_NAMES[kidRow(lost.id)]} [E]`); // ASCII: see pixelText.ts
+      placeCentred(this.callHint, toPx(lost.x), toPx(lost.y) - 22);
     }
 
     // Their houses: a label over the doorway of each child following me (as drawn: on a guest
@@ -874,33 +861,28 @@ export class WorldScene extends Phaser.Scene {
       let label = this.houseLabels.get(id);
       if (!label) {
         label = this.add
-          .text(0, 0, "", {
-            fontFamily: "monospace",
-            fontSize: "8px",
-            color: "#ddd7c6",
-            backgroundColor: "#0b0e16cc",
-            padding: { x: 2, y: 1 },
-            resolution: 4,
-          })
-          .setOrigin(0.5, 1)
+          .text(0, 0, "", pixelTextStyle(INK.parchment, INK.night))
+          .setOrigin(0, 1) // bottom-left; placeCentred() centres it on whole pixels
           .setDepth(DEPTH.glow + 1);
         this.houseLabels.set(id, label);
       }
       // The doorway's centre in pixels; the label sits just above it (on the house's wall).
       const x = (door.tileX + 0.5) * TILE_SIZE_PX;
       const y = door.tileY * TILE_SIZE_PX - 2;
-      // Pin it inside the visible area, and say which way(s) it was pushed.
-      const left = view.x + margin + 30;
-      const right = view.right - margin - 30;
+      // Which way(s) the doorway is off screen: that's the arrow ("<" = to the left, …).
+      const left = view.x + margin;
+      const right = view.right - margin;
       const top = view.y + margin + topBar + 12; // + 12: the label hangs above its point
       const bottom = view.bottom - margin;
-      const px = Phaser.Math.Clamp(x, left, right);
-      const py = Phaser.Math.Clamp(y, top, bottom);
       const arrow =
-        (y < top ? "↑" : y > bottom ? "↓" : "") + (x < left ? "←" : x > right ? "→" : "");
+        (y < top ? "^" : y > bottom ? "v" : "") + (x < left ? "<" : x > right ? ">" : ""); // ASCII
       const name = KID_NAMES[kidRow(id)];
       label.setText(arrow ? `${arrow} ${name}'s house` : `${name}'s house`);
-      label.setPosition(Math.round(px), Math.round(py));
+      // Then pin it inside the visible area, using its real width so no letter is cut off.
+      const half = label.width / 2;
+      const px = Phaser.Math.Clamp(x, left + half, right - half);
+      const py = Phaser.Math.Clamp(y, top, bottom);
+      placeCentred(label, px, py);
     }
   }
 

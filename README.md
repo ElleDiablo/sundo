@@ -76,3 +76,7 @@ to `packages/client/public/config.local.json` (git-ignored).
 
 ## Author
 Built by **Judelle Gaza** ([@ElleDiablo](https://github.com/ElleDiablo)).
+
+## Credits
+- Fonts: [Silkscreen](https://github.com/googlefonts/silkscreen) and [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans), both under the SIL Open Font License 1.1, bundled from npm (`@fontsource`).
+- All other art (characters, tiles, buildings) is original to this project.

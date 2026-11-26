@@ -5,17 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Sundo</title>
     <style>
+      /*
+       * The page's UI drawn like the game: pixel fonts, square corners, hard 1-colour shadows and
+       * a two-tone wooden frame instead of thin grey borders and soft rounded boxes. Colours come
+       * from the game's palette (night sky, candle amber, parchment, kubo wood).
+       */
+      :root {
+        --night: #0b0e16;
+        --panel: #151a26;
+        --ink: #ddd7c6; /* parchment */
+        --muted: #a89c80; /* faded parchment */
+        --amber: #f0a24a; /* candle light */
+        --amber-light: #ffd08a;
+        --amber-dark: #a8601e;
+        --wood: #6c4c34;
+        --wood-dark: #3b2a1d;
+        --pixel: "Pixelify Sans", system-ui, sans-serif;
+        --title: "Silkscreen", "Pixelify Sans", monospace;
+      }
       html,
       body {
         height: 100%;
         margin: 0;
-        background: #0b0e16;
-        color: #8f97aa;
-        font:
-          13px/1.4 system-ui,
-          -apple-system,
-          "Segoe UI",
-          sans-serif;
+        background: var(--night);
+        color: var(--muted);
+        font: 16px/1.35 var(--pixel);
+        /* Keep pixel fonts crisp: no smoothing of their square edges (macOS browsers). */
+        -webkit-font-smoothing: none;
+        -moz-osx-font-smoothing: grayscale;
       }
       #game {
         position: fixed;
@@ -26,153 +43,193 @@
       [hidden] {
         display: none !important;
       }
+
+      /* ── Shared pieces ─────────────────────────────────────────────────────────────────── */
+      /* A wooden frame: dark outer line, lighter inner line, and a hard shadow (no blur). */
+      .frame,
+      #wardrobe,
+      #result,
+      #room-badge,
+      #hud {
+        background: var(--panel);
+        border: 3px solid var(--wood-dark);
+        box-shadow:
+          inset 0 0 0 2px var(--wood),
+          4px 4px 0 #000;
+        border-radius: 0;
+      }
+      /* Buttons: a raised block, lit from the top-left; pressing pushes it down 2 px. */
+      button {
+        font: 600 16px/1 var(--pixel);
+        color: var(--ink);
+        background: var(--wood);
+        border: 2px solid #000;
+        border-radius: 0;
+        padding: 10px 14px;
+        cursor: pointer;
+        box-shadow:
+          inset 2px 2px 0 #8d6a4b,
+          inset -2px -3px 0 var(--wood-dark);
+      }
+      button:hover {
+        filter: brightness(1.12);
+      }
+      button:active:not(:disabled) {
+        transform: translateY(2px);
+        box-shadow:
+          inset 2px 2px 0 var(--wood-dark),
+          inset -2px -1px 0 #8d6a4b;
+      }
+      button.primary,
+      #create,
+      #enter,
+      #start-round,
+      #again {
+        color: var(--night);
+        background: var(--amber);
+        box-shadow:
+          inset 2px 2px 0 var(--amber-light),
+          inset -2px -3px 0 var(--amber-dark);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        filter: none;
+      }
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px dashed var(--amber);
+        outline-offset: 3px;
+      }
+
+      /* ── Lobby menu ─────────────────────────────────────────────────────────────────────── */
       #lobby {
         position: fixed;
         inset: 0 0 28px;
         display: grid;
         place-content: center;
         justify-items: center;
-        gap: 12px;
+        gap: 14px;
         text-align: center;
-        background: radial-gradient(
-          circle at 50% 45%,
-          rgba(58, 38, 16, 0.55),
-          rgba(11, 14, 22, 0.88) 60%
-        );
+        /* The world stays visible but dimmed behind the menu. */
+        background: rgba(11, 14, 22, 0.78);
         padding: 16px;
+      }
+      /* The menu itself: a wooden-framed board, like the result screen. */
+      #lobby > .board {
+        display: grid;
+        justify-items: center;
+        gap: 14px;
+        padding: 26px 34px 30px;
       }
       #lobby h1 {
         margin: 0;
-        font:
-          700 clamp(44px, 10vw, 84px) / 1 "Courier New",
-          monospace;
-        letter-spacing: 0.08em;
-        color: #f0a24a;
+        font: clamp(48px, 11vw, 96px) / 1 var(--title);
+        letter-spacing: 0.06em;
+        color: var(--amber);
+        text-shadow:
+          4px 4px 0 var(--amber-dark),
+          8px 8px 0 #000;
       }
       .tagline {
         margin: 0 0 8px;
-        color: #ddd7c6;
+        color: var(--ink);
+        font-size: 18px;
       }
       #room-code {
-        font:
-          700 clamp(40px, 9vw, 72px) / 1 "Courier New",
-          monospace;
+        font: clamp(40px, 9vw, 72px) / 1 var(--title);
         letter-spacing: 0.3em;
-        padding-left: 0.3em;
-        color: #ddd7c6;
-        border: 2px solid #f0a24a;
-        border-radius: 6px;
-        padding-block: 8px;
+        padding: 10px 0.3em 10px calc(0.3em + 0.3em);
+        color: var(--ink);
+        background: var(--night);
+        border: 3px solid var(--amber-dark);
+        box-shadow:
+          inset 0 0 0 2px var(--amber),
+          4px 4px 0 #000;
       }
       #lobby-status {
         margin: 0;
         min-height: 1.4em;
         max-width: 42ch;
+        color: var(--ink);
       }
       .actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 10px;
+        gap: 12px;
         justify-content: center;
       }
-      #lobby button {
-        font:
-          600 15px/1 system-ui,
-          -apple-system,
-          "Segoe UI",
-          sans-serif;
+      #lobby .actions button {
+        font-size: 18px;
         padding: 12px 18px;
-        border-radius: 6px;
-        border: 1px solid #3a4560;
-        background: #121726;
-        color: #ddd7c6;
-        cursor: pointer;
-      }
-      #lobby button#create,
-      #lobby button#enter {
-        background: #f0a24a;
-        border-color: #f0a24a;
-        color: #0b0e16;
-      }
-      #lobby button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      #lobby button:focus-visible {
-        outline: 2px solid #ddd7c6;
-        outline-offset: 2px;
       }
       #join-form {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
         justify-content: center;
-        gap: 8px;
+        gap: 10px;
       }
       #join-form label {
-        color: #ddd7c6;
+        color: var(--ink);
       }
       #join-code {
         width: 6.5ch;
-        font:
-          700 24px/1 "Courier New",
-          monospace;
+        font: 24px/1 var(--title);
         letter-spacing: 0.25em;
         text-transform: uppercase;
         text-align: center;
         padding: 8px 6px;
-        border-radius: 6px;
-        border: 1px solid #3a4560;
-        background: #0b0e16;
-        color: #ddd7c6;
+        border-radius: 0;
+        border: 3px solid var(--wood-dark);
+        box-shadow: inset 2px 2px 0 #000;
+        background: var(--night);
+        color: var(--ink);
       }
-      #join-code:focus-visible {
-        outline: 2px solid #f0a24a;
-        outline-offset: 2px;
-      }
+
+      /* ── Messages and corner badges ─────────────────────────────────────────────────────── */
+      /* Toasts look like a paper note pinned to the top of the screen. */
       #toast {
         position: fixed;
         top: 10px;
         left: 50%;
         transform: translateX(-50%);
-        font:
-          600 14px/1.3 system-ui,
-          -apple-system,
-          "Segoe UI",
-          sans-serif;
-        color: #0b0e16;
-        background: #f0a24a;
-        border-radius: 4px;
-        padding: 8px 12px;
+        font: 600 16px/1.3 var(--pixel);
+        color: var(--night);
+        background: var(--ink);
+        border: 3px solid var(--wood-dark);
+        box-shadow:
+          inset 0 -3px 0 #b8ad92,
+          4px 4px 0 #000;
+        padding: 8px 14px;
       }
-      #room-badge {
+      #room-badge,
+      #hud {
         position: fixed;
         top: 10px;
-        left: 10px;
-        font:
-          700 14px/1 "Courier New",
-          monospace;
-        letter-spacing: 0.15em;
-        color: #f0a24a;
-        background: rgba(11, 14, 22, 0.75);
-        border: 1px solid #3a4560;
-        border-radius: 4px;
-        padding: 6px 8px;
+        font: 14px/1 var(--title);
+        padding: 8px 10px;
       }
-      /* S2-01: the lobby plaza's hat / shirt picker, along the bottom of the game. */
+      #room-badge {
+        left: 10px;
+        color: var(--amber);
+      }
+      #hud {
+        right: 10px;
+        color: var(--ink);
+      }
+
+      /* ── S2-01: the lobby plaza's hat / shirt picker ────────────────────────────────────── */
       #wardrobe {
         position: fixed;
         left: 50%;
         bottom: 40px;
         transform: translateX(-50%);
         display: grid;
-        gap: 8px;
+        gap: 10px;
         justify-items: center;
-        background: rgba(11, 14, 22, 0.82);
-        border: 1px solid #3a4560;
-        border-radius: 6px;
-        padding: 10px 14px;
-        color: #ddd7c6;
+        padding: 12px 16px;
+        color: var(--ink);
       }
       #wardrobe-status {
         margin: 0;
@@ -187,80 +244,56 @@
       .pick > span {
         min-width: 3.5em;
         text-align: right;
-        color: #8f97aa;
+        font: 12px/1 var(--title);
+        color: var(--muted);
       }
       #wardrobe button {
-        font:
-          600 13px/1 system-ui,
-          -apple-system,
-          "Segoe UI",
-          sans-serif;
+        font-size: 14px;
         padding: 7px 10px;
-        border-radius: 5px;
-        border: 1px solid #3a4560;
-        background: #121726;
-        color: #ddd7c6;
-        cursor: pointer;
       }
       #wardrobe button[aria-pressed="true"] {
-        border-color: #f0a24a;
-        box-shadow: 0 0 0 1px #f0a24a;
+        color: var(--night);
+        background: var(--ink);
+        box-shadow:
+          inset 2px 2px 0 #fff4dc,
+          inset -2px -3px 0 #a89c80;
       }
       #wardrobe button.swatch {
-        width: 24px;
-        height: 24px;
+        width: 26px;
+        height: 26px;
         padding: 0;
+        box-shadow:
+          inset 2px 2px 0 rgba(255, 255, 255, 0.3),
+          inset -2px -2px 0 rgba(0, 0, 0, 0.35);
+      }
+      #wardrobe button.swatch[aria-pressed="true"] {
+        outline: 3px solid var(--amber);
+        outline-offset: 1px;
       }
       #wardrobe button#start-round {
-        background: #f0a24a;
-        border-color: #f0a24a;
-        color: #0b0e16;
-        padding: 9px 16px;
+        font-size: 16px;
+        padding: 10px 18px;
       }
-      #wardrobe button:disabled {
-        opacity: 0.5;
-      }
-      #wardrobe button:focus-visible {
-        outline: 2px solid #ddd7c6;
-        outline-offset: 2px;
-      }
-      /* S2-04: the round's counter, top right ("Home 2 / 5"). */
-      #hud {
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        font:
-          700 14px/1 "Courier New",
-          monospace;
-        color: #ddd7c6;
-        background: rgba(11, 14, 22, 0.75);
-        border: 1px solid #3a4560;
-        border-radius: 4px;
-        padding: 6px 8px;
-      }
-      /* S2-05: the end-of-round screen, in the middle of the game. */
+
+      /* ── S2-05: the end-of-round screen ─────────────────────────────────────────────────── */
       #result {
         position: fixed;
         top: 45%;
         left: 50%;
         transform: translate(-50%, -50%);
         display: grid;
-        gap: 10px;
+        gap: 12px;
         justify-items: center;
         text-align: center;
-        background: rgba(11, 14, 22, 0.9);
-        border: 1px solid #f0a24a;
-        border-radius: 8px;
-        padding: 18px 24px;
-        color: #ddd7c6;
-        min-width: 280px;
+        padding: 20px 26px;
+        color: var(--ink);
+        min-width: 300px;
       }
       #result-title {
         margin: 0;
-        font:
-          700 28px/1 "Courier New",
-          monospace;
-        color: #f0a24a;
+        font: 28px/1 var(--title);
+        color: var(--amber);
+        text-shadow: 3px 3px 0 var(--amber-dark);
       }
       #result-summary,
       #result-waiting {
@@ -268,9 +301,7 @@
       }
       #result table {
         border-collapse: collapse;
-        font:
-          14px/1.6 "Courier New",
-          monospace;
+        font: 16px/1.7 var(--pixel);
       }
       #result td {
         padding: 0 8px;
@@ -278,69 +309,54 @@
       }
       #result td:first-child {
         text-align: left;
-        color: #8f97aa;
+        color: var(--muted);
       }
       #result tr:last-child td {
-        border-top: 1px solid #3a4560;
-        font-weight: 700;
-        color: #f0a24a;
+        border-top: 3px solid var(--wood);
+        font: 16px/2 var(--title);
+        color: var(--amber);
       }
-      #result button {
-        font:
-          600 15px/1 system-ui,
-          -apple-system,
-          "Segoe UI",
-          sans-serif;
-        padding: 10px 16px;
-        border-radius: 6px;
-        border: 1px solid #f0a24a;
-        background: #f0a24a;
-        color: #0b0e16;
-        cursor: pointer;
-      }
-      #result button:disabled {
-        opacity: 0.5;
-      }
-      #result button:focus-visible {
-        outline: 2px solid #ddd7c6;
-        outline-offset: 2px;
-      }
+
       footer {
         position: fixed;
         inset: auto 0 0;
         height: 28px;
         display: grid;
         place-items: center;
+        font-size: 14px;
+        color: var(--muted);
       }
     </style>
   </head>
   <body>
     <div id="game"></div>
     <section id="lobby" aria-labelledby="lobby-title">
-      <h1 id="lobby-title">SUNDO</h1>
-      <p class="tagline">Bring them home before dawn.</p>
-      <div id="room-code" hidden></div>
-      <p id="lobby-status" role="status" aria-live="polite"></p>
-      <div class="actions">
-        <button id="create" type="button">Create room</button>
-        <button id="enter" type="button" hidden>Start walking</button>
-        <button id="join" type="button">Join with code</button>
+      <div class="board frame">
+        <h1 id="lobby-title">SUNDO</h1>
+        <p class="tagline">Bring them home before dawn.</p>
+        <div id="room-code" hidden></div>
+        <p id="lobby-status" role="status" aria-live="polite"></p>
+        <div class="actions">
+          <button id="create" type="button">Create room</button>
+          <button id="enter" type="button" hidden>Start walking</button>
+          <button id="join" type="button">Join with code</button>
+        </div>
+        <form id="join-form" hidden>
+          <label for="join-code">Room code</label>
+          <input
+            id="join-code"
+            name="code"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            maxlength="4"
+            placeholder="BAHO"
+            required
+          />
+          <button type="submit">Join</button>
+        </form>
       </div>
-      <form id="join-form" hidden>
-        <label for="join-code">Room code</label>
-        <input
-          id="join-code"
-          name="code"
-          inputmode="text"
-          autocomplete="off"
-          autocapitalize="characters"
-          spellcheck="false"
-          maxlength="4"
-          placeholder="BAHO"
-          required
-        />
-        <button type="submit">Join</button>
-      </form>
     </section>
     <section id="wardrobe" aria-label="Lobby plaza" hidden>
       <p id="wardrobe-status" role="status" aria-live="polite"></p>
@@ -360,7 +376,7 @@
       <p id="result-waiting" hidden>Waiting for the host to start another round…</p>
     </section>
     <div id="toast" role="status" aria-live="polite" hidden></div>
-    <footer>Sundo · dev build · WASD or arrow keys to walk · E to call a child · 1–4 emotes</footer>
+    <footer>WASD / arrows: walk · E: call a child · 1–4: emotes</footer>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

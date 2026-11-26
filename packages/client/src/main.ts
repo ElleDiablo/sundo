@@ -16,6 +16,11 @@
  * logs a summary to the console every 50 samples (the number recorded in the S1-05 PR).
  */
 import Phaser from "phaser";
+// Pixel fonts (SIL Open Font License), bundled by Vite from npm, so no request to a font CDN:
+// Silkscreen for text inside the game and for titles, Pixelify Sans for the page's menus.
+import "@fontsource/silkscreen/400.css";
+import "@fontsource/pixelify-sans/400.css";
+import "@fontsource/pixelify-sans/600.css";
 import { LatencyStats } from "./inputSender.ts";
 import { backToMenu, setBadgeDetail, setupLobby, toast } from "./lobby.ts";
 import { onServerMessage, send } from "./net.ts";
@@ -23,6 +28,13 @@ import { setupResult } from "./result.ts";
 import { playDawn, playKidHome, playWin } from "./sounds.ts";
 import { setupWardrobe } from "./wardrobe.ts";
 import { WorldScene, type RoundInfo } from "./WorldScene.ts";
+
+// Phaser draws text into the canvas once, with whatever font is ready at that moment. Wait for the
+// pixel font first (a second at most), or the first labels would be drawn in a fallback font.
+await Promise.race([
+  document.fonts.load('8px "Silkscreen"'),
+  new Promise((resolve) => setTimeout(resolve, 1000)),
+]);
 
 const game = new Phaser.Game({
   type: Phaser.AUTO, // WebGL where available
