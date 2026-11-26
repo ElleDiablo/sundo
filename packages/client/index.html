@@ -238,6 +238,73 @@
         border-radius: 4px;
         padding: 6px 8px;
       }
+      /* S2-05: the end-of-round screen, in the middle of the game. */
+      #result {
+        position: fixed;
+        top: 45%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        display: grid;
+        gap: 10px;
+        justify-items: center;
+        text-align: center;
+        background: rgba(11, 14, 22, 0.9);
+        border: 1px solid #f0a24a;
+        border-radius: 8px;
+        padding: 18px 24px;
+        color: #ddd7c6;
+        min-width: 280px;
+      }
+      #result-title {
+        margin: 0;
+        font:
+          700 28px/1 "Courier New",
+          monospace;
+        color: #f0a24a;
+      }
+      #result-summary,
+      #result-waiting {
+        margin: 0;
+      }
+      #result table {
+        border-collapse: collapse;
+        font:
+          14px/1.6 "Courier New",
+          monospace;
+      }
+      #result td {
+        padding: 0 8px;
+        text-align: right;
+      }
+      #result td:first-child {
+        text-align: left;
+        color: #8f97aa;
+      }
+      #result tr:last-child td {
+        border-top: 1px solid #3a4560;
+        font-weight: 700;
+        color: #f0a24a;
+      }
+      #result button {
+        font:
+          600 15px/1 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        padding: 10px 16px;
+        border-radius: 6px;
+        border: 1px solid #f0a24a;
+        background: #f0a24a;
+        color: #0b0e16;
+        cursor: pointer;
+      }
+      #result button:disabled {
+        opacity: 0.5;
+      }
+      #result button:focus-visible {
+        outline: 2px solid #ddd7c6;
+        outline-offset: 2px;
+      }
       footer {
         position: fixed;
         inset: auto 0 0;
@@ -282,7 +349,16 @@
       <button id="start-round" type="button" hidden>Start round</button>
     </section>
     <div id="room-badge" hidden></div>
-    <div id="hud" role="status" aria-live="polite" hidden></div>
+    <div id="hud" hidden></div>
+    <section id="result" aria-labelledby="result-title" role="dialog" hidden>
+      <h2 id="result-title"></h2>
+      <p id="result-summary" role="status" aria-live="polite"></p>
+      <table>
+        <tbody id="result-lines"></tbody>
+      </table>
+      <button id="again" type="button" hidden>Back to the plaza</button>
+      <p id="result-waiting" hidden>Waiting for the host to start another round…</p>
+    </section>
     <div id="toast" role="status" aria-live="polite" hidden></div>
     <footer>Sundo · dev build · WASD or arrow keys to walk · E to call a child</footer>
     <script type="module" src="./src/main.ts"></script>

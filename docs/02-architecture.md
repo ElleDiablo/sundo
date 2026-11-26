@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[] }` now (`tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost }` now (`tikbalang` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -188,6 +188,15 @@ nth. A following child within 1 tile of their own doorway leaves `kids`, joins `
 arrival order) and fires a `kid_home` event. Snapshots carry `home`, so every browser shows the same
 "Home 2 / 5" counter and plays the chime when the list grows. Going home isn't predicted: the
 predictor has no houses, so on a guest the child disappears when the next snapshot says so.
+
+**End of a round (S2-05):** `step()` counts `dawn` down from 7200 ticks (6:00). The round becomes
+`won` when the last child gets home (checked first, so the last tick still counts) or `lost` when
+`dawn` reaches 0, with a `round_won` / `dawn` event carrying the team score (children × 100 + seconds
+left × 2 − times lost × 25, `teamScore()`). After that the timer is frozen and E does nothing, but
+players can still walk. Snapshots carry `dawn` and `timesLost`, so guests compute the same score
+with the same function. The host's "Back to the plaza" calls `returnToLobby()`, which re-places
+everyone at the spawn (same rule as joining) and keeps the random generator going, so the next
+round hides the children somewhere new.
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that

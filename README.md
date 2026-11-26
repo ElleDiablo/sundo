@@ -20,7 +20,8 @@ sends keys and draws the host's snapshots 20 times a second.*
 the same link, press **Join with code** and type it. Walk with WASD or the arrow keys, pick a hat
 and a shirt in the kapilya plaza, and the host presses **Start round**. Find the lost children and
 press **E** next to one so they follow you (up to two at a time). A label shows which house is
-theirs; walk them to its doorway and they go inside.
+theirs; walk them to its doorway and they go inside. Bring all five home before the 6-minute
+dawn timer runs out; the result screen shows the team score, and the host can start another round.
 
 ## Highlights
 - **Real-time multiplayer, fully serverless:** API Gateway WebSockets + Lambda + DynamoDB, with

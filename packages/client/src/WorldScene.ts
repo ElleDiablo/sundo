@@ -35,6 +35,11 @@
  * at their doorway; snapshots carry who is home (`home`), and `onRound` tells the page so it can
  * update the "Home 2 / 5" counter, while the scene event "kid_home" (with the name) plays the sound.
  *
+ * The end of a round (S2-05): the engine counts down 6:00 to dawn and ends the round as "won" (all
+ * children home) or "lost" (dawn came). Snapshots carry `dawn` (ticks left) and `timesLost`, so
+ * every browser shows the same timer and works out the same score (engine teamScore). The host's
+ * "Back to the plaza" calls returnToLobby(), which puts everyone back at the spawn for another round.
+ *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
@@ -46,7 +51,10 @@ import {
   CALL_RANGE,
   createGame,
   removePlayer,
+  returnToLobby,
+  secondsLeft,
   startRound,
+  teamScore,
   findTiledPoint,
   findTiledPoints,
   mapFromTiled,
@@ -90,11 +98,17 @@ export interface Look {
 /** What the page needs to show about the lobby: the phase, and whole seconds left on the countdown. */
 export type OnLobby = (phase: Phase, countdownSeconds: number | null) => void;
 
-/** What the page shows during a round (S2-04): how many children are home, out of how many. */
+/**
+ * What the page shows during and after a round: how many children are home, out of how many
+ * (S2-04); the seconds left to dawn, times lost and the team score (S2-05).
+ */
 export interface RoundInfo {
   readonly phase: Phase;
   readonly home: number;
   readonly total: number;
+  readonly secondsLeft: number;
+  readonly timesLost: number;
+  readonly score: number;
 }
 export type OnRound = (info: RoundInfo) => void;
 
@@ -407,6 +421,8 @@ export class WorldScene extends Phaser.Scene {
         ackTicks,
         // The snapshot's children, in the engine's shape (no `following` = lost).
         kids: (snapshot.kids ?? []).map((k) => ({ ...k, following: k.following ?? null })),
+        // The phase only when the snapshot has one (`exactOptionalPropertyTypes`, S2-05).
+        ...(snapshot.phase ? { phase: snapshot.phase } : {}),
       });
     }
 
@@ -445,6 +461,16 @@ export class WorldScene extends Phaser.Scene {
   startRound(): void {
     if (this.guest) return; // only the host runs the engine
     this.state = startRound(this.state);
+  }
+
+  /**
+   * Host only: after a round, take everyone back to the plaza (S2-05). Everyone is moved to the
+   * spawn at once; a guest's prediction sees a jump of more than 2 tiles and snaps to it.
+   */
+  returnToLobby(): void {
+    if (this.guest) return;
+    this.state = returnToLobby(this.state, this.spawn);
+    this.previous = this.state; // no sliding from where they were: they're simply back
   }
 
   /** Phaser calls this every screen frame; `delta` is the real time since the last frame in ms. */
@@ -522,6 +548,8 @@ export class WorldScene extends Phaser.Scene {
         following === null ? { id, x, y } : { id, x, y, following },
       ),
       home: this.state.home, // S2-04: who is home (the counter, and the guests' sound)
+      dawn: this.state.dawn, // S2-05: the timer (frozen once the round has ended)
+      timesLost: this.state.timesLost, // S2-05: for the score
     };
     // The countdown only while it runs (`exactOptionalPropertyTypes`: no `countdown: undefined`).
     this.sendSnapshot(countdown === null ? snapshot : { ...snapshot, countdown });
@@ -598,7 +626,9 @@ export class WorldScene extends Phaser.Scene {
       ticks === undefined || ticks === null ? null : Math.ceil((ticks * TICK_MS) / 1000);
     const shown = this.shownLobby;
     if (phase === shown.phase && seconds === shown.seconds) return;
-    this.brownout.setVisible(phase === "round");
+    // The brownout lasts through the round and its win screen; at dawn (lost) the extra darkness
+    // lifts (S2-05).
+    this.brownout.setVisible(phase === "round" || phase === "won");
     this.shownLobby = { phase, seconds };
     this.onLobby?.(phase, seconds);
   }
@@ -615,9 +645,19 @@ export class WorldScene extends Phaser.Scene {
     const phase = this.guest ? (latest?.phase ?? "lobby") : this.state.phase;
     const home = this.guest ? (latest?.home ?? []) : this.state.home;
     const lost = this.guest ? (latest?.kids?.length ?? 0) : this.state.kids.length;
+    const dawn = this.guest ? (latest?.dawn ?? 0) : this.state.dawn;
+    const timesLost = this.guest ? (latest?.timesLost ?? 0) : this.state.timesLost;
 
-    // The counter first, so a "kid_home" listener already sees the new numbers.
-    const info: RoundInfo = { phase, home: home.length, total: home.length + lost };
+    // The counter first, so a "kid_home" listener already sees the new numbers. The score is the
+    // engine's own formula, so host and guests show the same number.
+    const info: RoundInfo = {
+      phase,
+      home: home.length,
+      total: home.length + lost,
+      secondsLeft: secondsLeft(dawn),
+      timesLost,
+      score: teamScore({ saved: home.length, dawn, timesLost }),
+    };
     const text = JSON.stringify(info);
     if (text !== this.shownRound) {
       this.shownRound = text;

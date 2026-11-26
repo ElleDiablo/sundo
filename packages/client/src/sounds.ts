@@ -46,3 +46,20 @@ export function playKidHome(): void {
   note(ctx, 659.25, 0.12, 0.5); // E5
   note(ctx, 783.99, 0.24, 0.8); // G5
 }
+
+/** Every child is home (S2-05): a rising four-note fanfare, C–E–G–C. */
+export function playWin(): void {
+  const ctx = audio();
+  if (!ctx) return;
+  void ctx.resume();
+  [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => note(ctx, freq, i * 0.15, 0.9));
+}
+
+/** Dawn came first (S2-05): two low, falling notes. */
+export function playDawn(): void {
+  const ctx = audio();
+  if (!ctx) return;
+  void ctx.resume();
+  note(ctx, 392.0, 0, 0.9, 0.12); // G4
+  note(ctx, 261.63, 0.35, 1.4, 0.12); // C4
+}
