@@ -21,11 +21,16 @@ export { nextStep, type Tile } from "./path.ts";
 // The tikbalang's state machine (S3-02).
 export {
   AMBUSH_RANGE,
+  BURST_SPEED,
+  BURST_TICKS,
   CATCH_RANGE,
+  chaseSpeed,
   canSee,
   GRACE_TICKS,
   isLit,
   LOSE_SIGHT_TICKS,
+  REST_SPEED,
+  REST_TICKS_AFTER_BURST,
   SIGHT_DARK,
   SIGHT_LIT,
   spawnTikbalang,
