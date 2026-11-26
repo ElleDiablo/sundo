@@ -3,7 +3,8 @@
  * determinism), plus the lobby (S2-01): looks, the host's Start and the full-room countdown, and
  * the lost children (S2-02): 5 of the map's hiding spots, chosen with the seeded generator, and
  * escorting them (S2-03): calling with E, the trailing line, escort speed, and taking them home
- * (S2-04): a following child at their own doorway goes inside.
+ * (S2-04): a following child at their own doorway goes inside, and the end of a round (S2-05):
+ * the dawn timer, winning and losing, the team score and going back to the lobby.
  * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
@@ -23,10 +24,14 @@ import {
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
   removePlayer,
+  returnToLobby,
+  ROUND_TICKS,
+  secondsLeft,
   SHIRT_COUNT,
   START_COUNTDOWN_TICKS,
   startRound,
   step,
+  teamScore,
   type GameState,
   type Inputs,
   type MoveInput,
@@ -552,10 +557,14 @@ describe("taking a child home (S2-04)", () => {
   });
 
   it("takes a following child inside at their doorway, with an event", () => {
-    // k0 follows p0 and stands 0.9 tiles below their doorway's centre (8500, 2500).
-    const start = round([[8500, 2500 + 900, "p0"]]);
+    // k0 follows p0 and stands 0.9 tiles below their doorway's centre (8500, 2500). k1 is still
+    // lost far away, so this isn't the last child (that would also end the round: S2-05).
+    const start = round([
+      [8500, 2500 + 900, "p0"],
+      [2500, 9500, null],
+    ]);
     const { state, events } = step(start, {});
-    expect(state.kids).toEqual([]);
+    expect(state.kids.map((k) => k.id)).toEqual(["k1"]);
     expect(state.home).toEqual(["k0"]);
     expect(events).toEqual([{ type: "kid_home", kid: "k0", player: "p0" }]);
   });
@@ -608,5 +617,105 @@ describe("taking a child home (S2-04)", () => {
   it("clears last round's children when a new round starts", () => {
     const done = { ...round([]), home: ["k0"], phase: "lobby" as const };
     expect(startRound(done).home).toEqual([]);
+  });
+});
+
+describe("dawn, winning and losing (S2-05)", () => {
+  // k0 lives at (8, 2); p0 stands at (8, 3), right below the doorway (same room as S2-04's tests).
+  const homes = [{ tileX: 8, tileY: 2 }];
+  const round = (kids: [number, number, string | null][]) => ({
+    ...startRound(createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 3 }], { homes })),
+    kids: kids.map(([x, y, following], i) => ({ id: `k${i}`, x, y, following })),
+  });
+
+  it("starts the round with 6:00 on the dawn timer and counts down one tick at a time", () => {
+    const start = round([[2500, 9500, null]]);
+    expect(start.dawn).toBe(ROUND_TICKS);
+    expect(secondsLeft(ROUND_TICKS)).toBe(360);
+    expect(run(start, {}, 20).dawn).toBe(ROUND_TICKS - 20);
+  });
+
+  it("has no timer in the lobby", () => {
+    const lobby = createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 3 }]);
+    expect(lobby.dawn).toBe(0);
+    expect(run(lobby, {}, 5).dawn).toBe(0);
+    expect(run(lobby, {}, 5).phase).toBe("lobby");
+  });
+
+  it("is lost when the timer reaches 0 first, with a dawn event and the score", () => {
+    // Two children: one home already, one still lost. One tick of dawn left.
+    const start = { ...round([[2500, 9500, null]]), home: ["k9"], dawn: 1 };
+    const { state, events } = step(start, {});
+    expect(state.phase).toBe("lost");
+    expect(state.dawn).toBe(0);
+    expect(events).toEqual([{ type: "dawn", score: 100 }]); // 1 saved × 100, 0 s left
+  });
+
+  it("is won when the last child gets home, with the score at that moment", () => {
+    // 4 already home; the last one (k0) is at their doorway; 100 s + 5 ticks left.
+    const start = { ...round([[8500, 2500 + 500, "p0"]]), home: ["a", "b", "c", "d"], dawn: 2005 };
+    const { state, events } = step(start, {});
+    expect(state.phase).toBe("won");
+    expect(state.home).toHaveLength(5);
+    // 5 × 100 + 100 s × 2 (2004 ticks = 100.2 s → 100) = 700
+    expect(events).toContainEqual({ type: "round_won", score: 700 });
+  });
+
+  it("counts a win on the very last tick as a win, not a loss", () => {
+    const start = { ...round([[8500, 2500 + 500, "p0"]]), dawn: 1 };
+    expect(step(start, {}).state.phase).toBe("won");
+  });
+
+  it("stops the timer and the children once the round has ended, but players still walk", () => {
+    const lost = { ...round([[8500, 4500, null]]), phase: "lost" as const, dawn: 0 };
+    const after = run(lost, { p0: { ...NONE, call: true, down: true } }, 10);
+    expect(after.phase).toBe("lost");
+    expect(after.dawn).toBe(0);
+    expect(after.kids[0]!.following).toBeNull(); // E does nothing after the round
+    expect(player(after, "p0").y).toBeGreaterThan(player(lost, "p0").y);
+  });
+
+  it("scores children × 100 + seconds left × 2 − times lost × 25", () => {
+    expect(teamScore({ saved: 5, dawn: 120 * 20, timesLost: 0 })).toBe(740);
+    expect(teamScore({ saved: 3, dawn: 0, timesLost: 2 })).toBe(250);
+    expect(teamScore({ saved: 0, dawn: 0, timesLost: 0 })).toBe(0);
+    expect(teamScore({ saved: 2, dawn: 19, timesLost: 0 })).toBe(200); // under a second: 0 s
+  });
+
+  it("returns everyone to the lobby at the spawn after a round, keeping their looks", () => {
+    const players = [
+      { id: "p0", tileX: 3, tileY: 3, hat: 2, shirt: 4 },
+      { id: "p1", tileX: 9, tileY: 9, hat: 1, shirt: 1 },
+    ];
+    const won = { ...startRound(createGame(ROOM, players)), phase: "won" as const, home: ["k0"] };
+    const lobby = returnToLobby(won, { tileX: 5, tileY: 5 });
+    expect(lobby.phase).toBe("lobby");
+    expect(lobby.kids).toEqual([]);
+    expect(lobby.home).toEqual([]);
+    expect(lobby.dawn).toBe(0);
+    expect(lobby.players.map((p) => [p.id, p.hat, p.shirt])).toEqual([
+      ["p0", 2, 4],
+      ["p1", 1, 1],
+    ]);
+    // Both near the spawn, on different tiles.
+    expect(player(lobby, "p0")).toMatchObject({ x: 5500, y: 5500 });
+    expect(player(lobby, "p1")).toMatchObject({ x: 6500, y: 5500 });
+  });
+
+  it("only returns to the lobby once the round is over", () => {
+    const playing = round([[2500, 9500, null]]);
+    expect(returnToLobby(playing, { tileX: 5, tileY: 5 })).toBe(playing);
+  });
+
+  it("can play a second round after the first: new spots, full timer", () => {
+    const spots = Array.from({ length: 10 }, (_, i) => ({ tileX: i + 1, tileY: 8 }));
+    const first = startRound(
+      createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }], { kidSpots: spots }),
+    );
+    const again = startRound(returnToLobby({ ...first, phase: "lost" }, { tileX: 5, tileY: 5 }));
+    expect(again.phase).toBe("round");
+    expect(again.dawn).toBe(ROUND_TICKS);
+    expect(again.kids).toHaveLength(KID_COUNT);
+    expect(again.kids.map((k) => k.x)).not.toEqual(first.kids.map((k) => k.x));
   });
 });

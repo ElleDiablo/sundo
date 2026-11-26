@@ -48,6 +48,9 @@ export interface SnapshotKid {
   readonly following?: string;
 }
 
+/** The game phases a snapshot may name (S2-01 lobby / round, S2-05 won / lost). */
+const PHASES: readonly string[] = ["lobby", "round", "won", "lost"];
+
 /** The most children a snapshot may list (5 per round; a little room for later designs). */
 const MAX_KIDS = 8;
 
@@ -68,8 +71,11 @@ export interface SnapshotFields {
    * Optional so an older client or relay without it still works (the guest then doesn't predict).
    */
   readonly ackTicks?: readonly number[];
-  /** "lobby" or "round" (S2-01). Optional so an older host still works. */
-  readonly phase?: "lobby" | "round";
+  /**
+   * "lobby" or "round" (S2-01), or how the round ended: "won" / "lost" (S2-05). Optional so an
+   * older host still works.
+   */
+  readonly phase?: "lobby" | "round" | "won" | "lost";
   /** Ticks left on the full-room countdown, while it runs (S2-01). */
   readonly countdown?: number;
   /** The lost children (S2-02). Optional: missing before the round (and from older hosts). */
@@ -79,6 +85,10 @@ export interface SnapshotFields {
    * "2 / 5" counter, and how a guest notices a new one (to play the sound and name them).
    */
   readonly home?: readonly string[];
+  /** Ticks left until dawn (S2-05): the timer, and the "seconds left" in the score. */
+  readonly dawn?: number;
+  /** Times a player got lost this round (S2-05 score; always 0 until the tikbalang, S3). */
+  readonly timesLost?: number;
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -220,7 +230,7 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
 function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
-  const { tick, players, acks, ackTicks, phase, countdown, kids, home } = v;
+  const { tick, players, acks, ackTicks, phase, countdown, kids, home, dawn, timesLost } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
   const isCounts = (a: unknown): a is number[] =>
@@ -229,8 +239,11 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   // ackTicks may be missing (older host), but if it's there it must be valid.
   if (ackTicks !== undefined && !isCounts(ackTicks)) return undefined;
   // S2-01 fields, also optional: if present they must be valid.
-  if (phase !== undefined && phase !== "lobby" && phase !== "round") return undefined;
+  if (phase !== undefined && !PHASES.includes(phase as string)) return undefined;
   if (countdown !== undefined && !isCount(countdown)) return undefined;
+  // S2-05: the timer and the times-lost count are whole numbers, 0 or more.
+  if (dawn !== undefined && !isCount(dawn)) return undefined;
+  if (timesLost !== undefined && !isCount(timesLost)) return undefined;
   const checkedKids = kids === undefined ? undefined : readKids(kids);
   if (kids !== undefined && !checkedKids) return undefined;
   // S2-04: a short list of short ids (the same limits as the kids themselves).
@@ -258,10 +271,12 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     acks,
   };
   if (ackTicks !== undefined) snapshot.ackTicks = ackTicks;
-  if (phase !== undefined) snapshot.phase = phase;
+  if (phase !== undefined) snapshot.phase = phase as NonNullable<SnapshotFields["phase"]>;
   if (countdown !== undefined) snapshot.countdown = countdown;
   if (checkedKids) snapshot.kids = checkedKids;
   if (home !== undefined) snapshot.home = home;
+  if (dawn !== undefined) snapshot.dawn = dawn;
+  if (timesLost !== undefined) snapshot.timesLost = timesLost;
   return snapshot;
 }
 

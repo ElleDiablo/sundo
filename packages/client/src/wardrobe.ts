@@ -102,6 +102,7 @@ export function setupWardrobe(options: WardrobeOptions): Wardrobe {
     show(phase, seconds) {
       panel.hidden = phase !== "lobby";
       if (phase !== "lobby") return;
+      startBtn.disabled = false; // back in the plaza after a round (S2-05): Start works again
       if (seconds !== null) status.textContent = `Room full: starting in ${seconds}…`;
       else if (options.isHost)
         status.textContent = "Pick your look, then start when everyone's here.";
