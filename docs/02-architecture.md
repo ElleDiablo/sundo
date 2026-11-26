@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt? }` now (`light, call, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown? }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y}] }` now (`tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -170,6 +170,12 @@ type), and the host's engine applies it, but only in the lobby. The host's **Sta
 it's deterministic and stops if someone leaves. Snapshots carry `phase` (and `countdown` while it
 runs), so guests close the picker and see the brownout at the same moment. All the new fields are
 optional, so an older host, guest or relay still works (without looks).
+
+**Lost children (S2-02):** the map has 12 hiding spots (Tiled points named `kid`). When the round
+starts, the engine picks 5 of them with its seeded generator (a partial Fisher–Yates shuffle), so
+the host's seed alone decides where the children are, and a replay puts them in the same places.
+The generator's state is part of `GameState` (`rngState`), so later random choices continue the
+same sequence. A test on the real map checks every spot can be walked to from the plaza.
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that
