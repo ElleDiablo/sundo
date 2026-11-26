@@ -84,8 +84,7 @@ describe("createGame", () => {
       shirt: 0,
       emote: null,
       emoteAt: null,
-      faceX: 0,
-      faceY: 1,
+      aim: 8,
       light: false,
       battery: BATTERY_MAX,
       baliktad: 0,
@@ -109,8 +108,7 @@ describe("addPlayer", () => {
       shirt: 0,
       emote: null,
       emoteAt: null,
-      faceX: 0,
-      faceY: 1,
+      aim: 8,
       light: false,
       battery: BATTERY_MAX,
       baliktad: 0,
@@ -821,11 +819,21 @@ describe("the flashlight and safe zones (S3-01)", () => {
     startRound(createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 5 }], { safeZones }));
   const LIGHT = { p0: { ...NONE, light: true } };
 
-  it("faces the way the player last walked, even after stopping", () => {
+  it("aims the way the player last walked, even after stopping", () => {
     let state = step(round(), { p0: hold({ left: true, up: true }) }).state;
-    expect(player(state, "p0")).toMatchObject({ faceX: -1, faceY: -1 });
+    expect(player(state, "p0").aim).toBe(20); // up-left = 225°
     state = step(state, {}).state;
-    expect(player(state, "p0")).toMatchObject({ faceX: -1, faceY: -1 });
+    expect(player(state, "p0").aim).toBe(20);
+  });
+
+  it("aims where the mouse says, even while walking another way (look pass)", () => {
+    const state = step(round(), { p0: { ...hold({ right: true }), aim: 13 } }).state;
+    expect(player(state, "p0").aim).toBe(13);
+  });
+
+  it("ignores an invalid aim and falls back to the keys", () => {
+    const state = step(round(), { p0: { ...hold({ right: true }), aim: 32 } }).state;
+    expect(player(state, "p0").aim).toBe(0);
   });
 
   it("turns the light on while Space is held, and drains one tick of battery per tick", () => {

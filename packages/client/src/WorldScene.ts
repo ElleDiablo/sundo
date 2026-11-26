@@ -106,6 +106,7 @@ import {
   type TiledMap,
   type TileMap,
 } from "@sundo/engine";
+import { aimOfAngle, angleOfAim } from "@sundo/engine";
 import type {
   InputFields,
   SnapshotFields,
@@ -216,9 +217,8 @@ type DrawnPlayer =
   | SnapshotPlayer
   | (Omit<SnapshotPlayer, "emote" | "light"> & {
       emote: number | null;
-      // From the engine (host, or my own prediction): facing as two numbers (S3-01).
-      faceX?: number;
-      faceY?: number;
+      // From the engine (host, or my own prediction): where the flashlight points (look pass).
+      aim?: number;
       light?: boolean;
       baliktad?: number; // S3-04: ticks left in baliktad
     });
@@ -229,14 +229,16 @@ function inBaliktad(p: DrawnPlayer): boolean {
   return "bal" in p && (p.bal ?? 0) > 0;
 }
 
-/** A snapshot's packed facing (0–8) → faceX, faceY (each −1, 0 or 1). Missing → facing down. */
-function unpackFace(face: number | undefined): { faceX: number; faceY: number } {
-  if (face === undefined) return { faceX: 0, faceY: 1 };
-  return { faceX: Math.floor(face / 3) - 1, faceY: (face % 3) - 1 };
+/**
+ * Turns angle `from` towards `to` (radians) by `amount` (0–1) the short way round, so a beam
+ * pointing at 350° that should point at 10° turns 20° clockwise, not 340° back.
+ */
+function turnTowards(from: number, to: number, amount: number): number {
+  let d = (to - from) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return from + d * amount;
 }
-
-/** faceX, faceY → the snapshot's packed facing, 0–8. */
-const packFace = (faceX: number, faceY: number) => (faceX + 1) * 3 + (faceY + 1);
 
 export class WorldScene extends Phaser.Scene {
   private state!: GameState; // the engine's current state
@@ -260,6 +262,15 @@ export class WorldScene extends Phaser.Scene {
   private emoteKey: { emote: number; until: number } | undefined;
   /** Until when a tap of Q stays in my input (S3-04; same reason as EMOTE_HOLD_MS). */
   private baliktadUntil = 0;
+  /**
+   * Look pass: the mouse aims my flashlight once it has moved over the game during the round;
+   * until then (or with no mouse) the light points the way I walk. `mouseAngle` = the exact angle
+   * from my tanod's chest to the pointer (radians), drawn as is; the engine gets it in 32 steps.
+   */
+  private mouseAim = false;
+  private mouseAngle = 0;
+  /** Look pass: each tanod's beam angle as drawn, turning smoothly towards their aim. */
+  private beamAngles = new Map<string, number>();
   /** The tikbalang (S3-02) and its eye glint (above the darkness); hidden outside the round. */
   private tikSprite!: Phaser.GameObjects.Sprite;
   private tikEye!: Phaser.GameObjects.Sprite;
@@ -504,6 +515,10 @@ export class WorldScene extends Phaser.Scene {
     // SPACE: the flashlight (S3-01).
     // Q: baliktad (S3-04).
     this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR,SPACE,Q") as Keys;
+    // Look pass: moving the mouse over the game hands the flashlight's aim to the mouse.
+    this.input.on("pointermove", () => {
+      if (this.controlsOn) this.mouseAim = true;
+    });
     this.keys.Q.on("down", () => {
       if (this.controlsOn) this.baliktadUntil = performance.now() + EMOTE_HOLD_MS;
     });
@@ -744,7 +759,7 @@ export class WorldScene extends Phaser.Scene {
     const snapshot: SnapshotFields = {
       tick,
       // The emote only while one is showing (S2-06), like a child's `following`.
-      // S3-01: facing packed into one number, the light only while on, and the battery.
+      // Look pass: the aim (0–31). S3-01: the light only while on, and the battery.
       players: this.state.players.map(
         ({
           id,
@@ -753,8 +768,7 @@ export class WorldScene extends Phaser.Scene {
           hat,
           shirt,
           emote,
-          faceX,
-          faceY,
+          aim,
           light,
           battery,
           baliktad,
@@ -766,7 +780,7 @@ export class WorldScene extends Phaser.Scene {
           hat,
           shirt,
           ...(emote === null ? {} : { emote }),
-          face: packFace(faceX, faceY),
+          aim,
           ...(light ? { light } : {}),
           battery,
           // S3-04: baliktad and its cooldown, only while they run.
@@ -901,7 +915,10 @@ export class WorldScene extends Phaser.Scene {
       left: k.A.isDown || k.LEFT.isDown,
       right: k.D.isDown || k.RIGHT.isDown,
       call: k.E.isDown, // S2-03: call the nearest lost child
-      light: k.SPACE.isDown, // S3-01: the flashlight
+      // S3-01: the flashlight, on Space or (look pass) while the left mouse button is held.
+      light: k.SPACE.isDown || (this.mouseAim && this.input.activePointer.leftButtonDown()),
+      // Look pass: where the mouse points the light, once the mouse has been used.
+      ...(this.mouseAim ? { aim: aimOfAngle(this.mouseAngle) } : {}),
       // S3-04: baliktad while Q is held, or for a moment after a quick tap.
       baliktad: k.Q.isDown || performance.now() < this.baliktadUntil,
       ...look,
@@ -1120,13 +1137,21 @@ export class WorldScene extends Phaser.Scene {
       // S3-01: a small glow around every tanod, and their flashlight cone while it's on. The
       // cone starts at their chest (12 px above the feet) and points the way they face.
       this.tanodGlows.push({ x, y: y - 10, size: TANOD_GLOW });
-      if (p.light) {
-        const { faceX, faceY } =
-          "faceX" in p && p.faceX !== undefined
-            ? { faceX: p.faceX, faceY: p.faceY ?? 1 }
-            : unpackFace("face" in p ? p.face : undefined);
-        this.beams.push({ x, y: y - 12, angle: Math.atan2(faceY, faceX) });
+      // Look pass: where the pointer is in the world right now (the camera may have moved since
+      // the mouse did, so it's worked out again every frame), as an angle from my chest.
+      if (p.id === this.localId && this.mouseAim) {
+        const pointer = this.input.activePointer.positionToCamera(this.cameras.main);
+        const { x: mx, y: my } = pointer as Phaser.Math.Vector2;
+        this.mouseAngle = Math.atan2(my - (y - 12), mx - x);
       }
+      // My own beam follows the mouse exactly; everyone else's turns smoothly
+      // towards their aim (it arrives in 32 steps, ~20 times a second).
+      const target =
+        p.id === this.localId && this.mouseAim ? this.mouseAngle : angleOfAim(p.aim ?? 8);
+      const old = this.beamAngles.get(p.id);
+      const angle = old === undefined ? target : turnTowards(old, target, 0.35);
+      this.beamAngles.set(p.id, angle);
+      if (p.light) this.beams.push({ x, y: y - 12, angle });
     }
   }
 

@@ -207,12 +207,16 @@ describe("input and snapshot messages", () => {
     const input = { seq: 11, up: false, down: false, left: false, right: false, light: true };
     expect(readInputBody(JSON.stringify(input))).toEqual(input);
     expect(readInputBody(JSON.stringify({ ...input, light: "on" }))).toBeUndefined();
+    // Look pass: the mouse aim, 0–31.
+    expect(readInputBody(JSON.stringify({ ...input, aim: 20 }))).toEqual({ ...input, aim: 20 });
+    expect(readInputBody(JSON.stringify({ ...input, aim: 32 }))).toBeUndefined();
+    expect(readInputBody(JSON.stringify({ ...input, aim: -1 }))).toBeUndefined();
     const lit = {
       ...snapshot,
-      players: [{ id: "p0", x: 1, y: 2, face: 5, light: true, battery: 900 }],
+      players: [{ id: "p0", x: 1, y: 2, aim: 31, light: true, battery: 900 }],
     };
     expect(readSnapshotBody(JSON.stringify(lit))).toEqual(lit);
-    for (const bad of [{ face: 9 }, { light: 1 }, { battery: -1 }]) {
+    for (const bad of [{ aim: 32 }, { aim: 1.5 }, { light: 1 }, { battery: -1 }]) {
       const players = [{ id: "p0", x: 1, y: 2, ...bad }];
       expect(readSnapshotBody(JSON.stringify({ ...snapshot, players }))).toBeUndefined();
     }

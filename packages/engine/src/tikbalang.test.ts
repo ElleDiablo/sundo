@@ -198,7 +198,7 @@ describe("the tikbalang (S3-02)", () => {
     const state = round({ x: 10500, y: 8500, mode: "chase", target: "p0" }, 15, 8);
     const facing = {
       ...state,
-      players: state.players.map((p) => ({ ...p, faceX: -1, faceY: 0 })),
+      players: state.players.map((p) => ({ ...p, aim: 16 })),
     };
     const dark = step(facing, {}).state;
     const lit = step(facing, { p0: { ...NONE, light: true } }).state;

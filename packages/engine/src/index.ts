@@ -6,6 +6,15 @@
  * The same inputs always give the same game, in the browser, in tests and in the simulator.
  */
 
+// Where a flashlight points (look pass): 32 whole-number directions and their vectors.
+export {
+  AIM_STEPS,
+  AIM_VECTORS,
+  aimOfAngle,
+  aimOfKeys,
+  angleOfAim,
+  isAim,
+} from "./aim.ts";
 // Light and sight (S3-01): safe zones, the flashlight cone, line of sight past walls.
 export {
   inCone,

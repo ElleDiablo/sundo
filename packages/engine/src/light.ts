@@ -5,6 +5,7 @@
  * Everything is whole-number or exactly-rounded arithmetic (no Math.hypot, no trigonometry at run
  * time), so the host and every guest's prediction get identical answers (ADR-0004).
  */
+import { AIM_VECTORS } from "./aim.ts";
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
 
 /** A rectangle of whole tiles: the safe zones (the kapilya plaza, the sari-sari store). */
@@ -56,19 +57,13 @@ export function lineOfSight(map: TileMap, x1: number, y1: number, x2: number, y2
 }
 
 /**
- * Is (x, y) inside the cone of a flashlight at (fromX, fromY) pointing along (faceX, faceY)?
+ * Is (x, y) inside the cone of a flashlight at (fromX, fromY) pointing at `aim` (aim.ts)?
  * Within LIGHT_RANGE, and within 35° of the pointing direction. The angle test without angles:
  * for the vector v to the point and the direction f, the angle is under 35° when
  * v·f > 0 and (v·f)² ≥ cos²35° × |v|² × |f|². Walls are checked separately (lineOfSight).
  */
-export function inCone(
-  fromX: number,
-  fromY: number,
-  faceX: number,
-  faceY: number,
-  x: number,
-  y: number,
-): boolean {
+export function inCone(fromX: number, fromY: number, aim: number, x: number, y: number): boolean {
+  const [faceX, faceY] = AIM_VECTORS[aim] ?? [0, 1000]; // an unknown aim points down
   const vx = x - fromX;
   const vy = y - fromY;
   const dist2 = vx * vx + vy * vy;
@@ -76,6 +71,6 @@ export function inCone(
   if (dist2 === 0) return true;
   const dot = vx * faceX + vy * faceY;
   if (dot <= 0) return false;
-  const face2 = faceX * faceX + faceY * faceY; // 1 (straight) or 2 (diagonal)
+  const face2 = faceX * faceX + faceY * faceY; // about 1000² (the table's vectors are 1000 long)
   return dot * dot >= LIGHT_COS2 * dist2 * face2;
 }

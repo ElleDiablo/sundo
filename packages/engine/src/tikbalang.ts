@@ -136,7 +136,7 @@ export function isLit(t: TikbalangState, players: readonly PlayerState[], map: T
   return players.some(
     (p) =>
       p.light &&
-      inCone(p.x, p.y, p.faceX, p.faceY, t.x, t.y) &&
+      inCone(p.x, p.y, p.aim, t.x, t.y) &&
       lineOfSight(map, p.x, p.y, t.x, t.y),
   );
 }

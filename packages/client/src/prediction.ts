@@ -172,8 +172,8 @@ export class Predictor {
       dawn: ROUND_TICKS,
       timesLost: 0,
       // No emote: my bubble comes from the snapshot, not the prediction (S2-06).
-      // Facing starts from the last prediction (or down), so the flashlight doesn't flip on a
-      // snapshot; replaying the inputs below turns it the way I pressed (S3-01).
+      // The aim starts from the last prediction (or down), so the flashlight doesn't flip on a
+      // snapshot; replaying the inputs below turns it the way I pressed or pointed (look pass).
       players: [
         {
           id: this.id,
@@ -183,8 +183,7 @@ export class Predictor {
           shirt: 0,
           emote: null,
           emoteAt: null,
-          faceX: this.state ? this.me(this.state).faceX : 0,
-          faceY: this.state ? this.me(this.state).faceY : 1,
+          aim: this.state ? this.me(this.state).aim : 8, // 8 = down (engine aim.ts)
           light: false,
           battery: host.battery ?? BATTERY_MAX,
           baliktad: 0, // S3-04: drawn from the snapshot, not predicted
@@ -252,11 +251,11 @@ export class Predictor {
       });
   }
 
-  /** Which way my predicted tanod faces and whether its flashlight is on (S3-01: my own cone). */
-  facing(): { faceX: number; faceY: number; light: boolean } | undefined {
+  /** Where my predicted tanod's flashlight points and whether it's on (S3-01, look pass: aim). */
+  facing(): { aim: number; light: boolean } | undefined {
     if (!this.state) return undefined;
-    const { faceX, faceY, light } = this.me(this.state);
-    return { faceX, faceY, light };
+    const { aim, light } = this.me(this.state);
+    return { aim, light };
   }
 
   private me(state: GameState) {
