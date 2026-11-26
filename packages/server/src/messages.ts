@@ -23,16 +23,21 @@ export interface InputFields {
   readonly down: boolean;
   readonly left: boolean;
   readonly right: boolean;
+  /** The hat and shirt colour I picked in the lobby (S2-01). Optional: older clients don't send them. */
+  readonly hat?: number;
+  readonly shirt?: number;
 }
 
-/** One player's position in a snapshot, in engine units (1 tile = 1000). */
+/** One player in a snapshot: position in engine units (1 tile = 1000), and looks (S2-01). */
 export interface SnapshotPlayer {
   readonly id: string;
   readonly x: number;
   readonly y: number;
+  readonly hat?: number;
+  readonly shirt?: number;
 }
 
-/** The host's view of the game at one tick, sent to every guest 10 times a second. */
+/** The host's view of the game at one tick, sent to every guest 20 times a second. */
 export interface SnapshotFields {
   /** The engine tick this was taken at (20 per second), so guests can order and time snapshots. */
   readonly tick: number;
@@ -49,6 +54,10 @@ export interface SnapshotFields {
    * Optional so an older client or relay without it still works (the guest then doesn't predict).
    */
   readonly ackTicks?: readonly number[];
+  /** "lobby" or "round" (S2-01). Optional so an older host still works. */
+  readonly phase?: "lobby" | "round";
+  /** Ticks left on the full-room countdown, while it runs (S2-01). */
+  readonly countdown?: number;
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -148,24 +157,44 @@ const isCount = (n: unknown): n is number =>
   typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 const isCoord = (n: unknown): n is number =>
   typeof n === "number" && Number.isSafeInteger(n) && Math.abs(n) <= MAX_COORD;
+/**
+ * A hat or shirt number. The relay doesn't know how many there are (that's the engine's job), so
+ * it only checks for a small whole number; the engine ignores anything out of range.
+ */
+const isLook = (n: unknown): n is number => isCount(n) && n < 16;
+
+/**
+ * Copies the optional `hat` and `shirt` fields onto `into` if they're valid. Returns false if one
+ * is present but invalid (the whole message is then refused, like any other bad field).
+ */
+function copyLook(from: Record<string, unknown>, into: { hat?: number; shirt?: number }): boolean {
+  for (const key of ["hat", "shirt"] as const) {
+    const value = from[key];
+    if (value === undefined) continue;
+    if (!isLook(value)) return false;
+    into[key] = value;
+  }
+  return true;
+}
 
 /** Checks the fields of an input message; undefined if any is missing or the wrong type. */
 function readInput(v: Record<string, unknown>): InputFields | undefined {
   const { seq, up, down, left, right } = v;
   if (!isCount(seq)) return undefined;
   if (![up, down, left, right].every((b) => typeof b === "boolean")) return undefined;
-  return {
+  const input: { -readonly [K in keyof InputFields]: InputFields[K] } = {
     seq,
     up: up as boolean,
     down: down as boolean,
     left: left as boolean,
     right: right as boolean,
   };
+  return copyLook(v, input) ? input : undefined;
 }
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
 function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
-  const { tick, players, acks, ackTicks } = v;
+  const { tick, players, acks, ackTicks, phase, countdown } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
   const isCounts = (a: unknown): a is number[] =>
@@ -173,16 +202,31 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (!isCounts(acks)) return undefined;
   // ackTicks may be missing (older host), but if it's there it must be valid.
   if (ackTicks !== undefined && !isCounts(ackTicks)) return undefined;
+  // S2-01 fields, also optional: if present they must be valid.
+  if (phase !== undefined && phase !== "lobby" && phase !== "round") return undefined;
+  if (countdown !== undefined && !isCount(countdown)) return undefined;
   const checked: SnapshotPlayer[] = [];
   for (const p of players as unknown[]) {
     if (!p || typeof p !== "object") return undefined;
-    const { id, x, y } = p as Record<string, unknown>;
+    const fields = p as Record<string, unknown>;
+    const { id, x, y } = fields;
     if (typeof id !== "string" || id.length > 8 || !isCoord(x) || !isCoord(y)) return undefined;
-    checked.push({ id, x, y }); // copy only the known fields: extra ones are dropped, not passed on
+    // Copy only the known fields: extra ones are dropped, not passed on.
+    const player: { -readonly [K in keyof SnapshotPlayer]: SnapshotPlayer[K] } = { id, x, y };
+    if (!copyLook(fields, player)) return undefined;
+    checked.push(player);
   }
-  return ackTicks === undefined
-    ? { tick, players: checked, acks }
-    : { tick, players: checked, acks, ackTicks };
+  // Build the result with only the optional fields that were sent (`exactOptionalPropertyTypes`
+  // doesn't allow writing `ackTicks: undefined`, so they're added one by one).
+  const snapshot: { -readonly [K in keyof SnapshotFields]: SnapshotFields[K] } = {
+    tick,
+    players: checked,
+    acks,
+  };
+  if (ackTicks !== undefined) snapshot.ackTicks = ackTicks;
+  if (phase !== undefined) snapshot.phase = phase;
+  if (countdown !== undefined) snapshot.countdown = countdown;
+  return snapshot;
 }
 
 /** Parses a JSON message body into an object, or undefined if it isn't one. */
