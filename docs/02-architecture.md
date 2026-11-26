@@ -213,7 +213,8 @@ tanod and each flashlight cone out of it every frame.
 From a patrol point it sometimes lies in wait at an `ambush` point for 15 s and charges anyone
 within 4 tiles. It walks with breadth-first search on the tile grid (`path.ts`, redone every tick,
 4 neighbours in a fixed order, avoiding walls and safe zones). A flashlight shone at it halves its
-speed. Random choices use the game's seeded generator, so a replay has the same tikbalang.
+speed. A chase starts with a burst (S3-07): 5 tiles/s for 2 s, then 2 tiles/s for 3 s (the
+window to escape), then 3 tiles/s (`chaseSpeed`). Random choices use the game's seeded generator, so a replay has the same tikbalang.
 Snapshots carry its position, mode and facing; guests interpolate it. In the dark only its eye
 shows (drawn above the darkness while it stalks or chases).
 

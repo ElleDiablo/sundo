@@ -28,7 +28,12 @@ import {
 import { mapFromRows } from "./map.ts";
 import {
   AMBUSH_RANGE,
+  BURST_SPEED,
+  BURST_TICKS,
   CATCH_RANGE,
+  chaseSpeed,
+  REST_SPEED,
+  REST_TICKS_AFTER_BURST,
   GRACE_TICKS,
   LOSE_SIGHT_TICKS,
   SIGHT_DARK,
@@ -168,10 +173,11 @@ describe("the tikbalang (S3-02)", () => {
   });
 
   it("gives up after 3 s without seeing its target", () => {
-    // Chasing a player who is now behind the wall and out of range.
-    const state = round({ x: 4500, y: 3500, mode: "chase", target: "p0" }, 18, 3);
-    const after = run(state, {}, LOSE_SIGHT_TICKS + 1).state;
-    expect(tik(after).mode).toBe("patrol");
+    // Chasing a player who has reached a safe zone: it can't see in or follow them there.
+    const safeZones = [{ tileX: 16, tileY: 1, width: 3, height: 4 }];
+    const state = round({ x: 4500, y: 3500, mode: "chase", target: "p0" }, 18, 3, { safeZones });
+    expect(tik(run(state, {}, LOSE_SIGHT_TICKS - 1).state).mode).toBe("chase");
+    expect(tik(run(state, {}, LOSE_SIGHT_TICKS).state).mode).toBe("patrol");
   });
 
   it("charges from an ambush point when a player comes within 4 tiles", () => {
@@ -196,8 +202,9 @@ describe("the tikbalang (S3-02)", () => {
     };
     const dark = step(facing, {}).state;
     const lit = step(facing, { p0: { ...NONE, light: true } }).state;
-    expect(tik(dark).x - 10500).toBe(TIK_SPEED);
-    expect(tik(lit).x - 10500).toBe(TIK_SPEED / 2);
+    // A new chase starts with the burst (S3-07): 250 a tick, or 125 in the light.
+    expect(tik(dark).x - 10500).toBe(BURST_SPEED);
+    expect(tik(lit).x - 10500).toBe(BURST_SPEED / 2);
   });
 
   it("is deterministic: the same seed and inputs give the same tikbalang", () => {
@@ -297,5 +304,26 @@ describe("baliktad (S3-04)", () => {
     expect(again.players[0]!.baliktadCooldown).toBe(BALIKTAD_COOLDOWN - 200);
     const lobby = createGame(ROOM, [{ id: "p0", tileX: 14, tileY: 8 }]);
     expect(run(lobby, Q, 1).state.players[0]!.baliktad).toBe(0);
+  });
+});
+
+describe("the chase burst (S3-07)", () => {
+  it("sprints at 5 tiles/s for 2 s, walks at 2 tiles/s for 3 s, then 3 tiles/s", () => {
+    expect(chaseSpeed(0)).toBe(BURST_SPEED);
+    expect(chaseSpeed(BURST_TICKS - 1)).toBe(BURST_SPEED);
+    expect(chaseSpeed(BURST_TICKS)).toBe(REST_SPEED);
+    expect(chaseSpeed(BURST_TICKS + REST_TICKS_AFTER_BURST - 1)).toBe(REST_SPEED);
+    expect(chaseSpeed(BURST_TICKS + REST_TICKS_AFTER_BURST)).toBe(TIK_SPEED);
+    expect([BURST_SPEED, REST_SPEED, TIK_SPEED].map((v) => (v * 20) / 1000)).toEqual([5, 2, 3]);
+    expect(BURST_TICKS / 20).toBe(2);
+    expect(REST_TICKS_AFTER_BURST / 20).toBe(3);
+  });
+
+  it("moves that fast in a real chase: 2 s of burst covers 10 tiles", () => {
+    // A long corridor: the tikbalang at x = 1.5 tiles chasing p0, who runs right at 4 tiles/s.
+    const start = round({ x: 1500, y: 9500, mode: "chase", target: "p0" }, 5, 9);
+    const after = run(start, { p0: { ...NONE, right: true } }, BURST_TICKS).state;
+    expect(tik(after).x - 1500).toBeGreaterThan(9000); // ~10 tiles (a little less at the start)
+    expect(tik(after).timer).toBe(BURST_TICKS);
   });
 });

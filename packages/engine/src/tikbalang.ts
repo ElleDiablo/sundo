@@ -17,7 +17,10 @@
  *   ambush  walks to an ambush point (the map's "ambush" points: the bridge, a dike junction…)
  *           and waits there 15 s, charging anyone who comes within 4 tiles
  *   stalk   follows a player it can see, staying about 4 tiles away
- *   chase   runs straight at them (path-finding around walls); within 0.7 tiles = caught
+ *   chase   runs at them (path-finding around walls); within 0.7 tiles = caught. It starts with a
+ *           BURST (S3-07): 5 tiles/s for 2 s, then it must rest, walking at 2 tiles/s for 3 s
+ *           (the window to escape), then 3 tiles/s. Nobody simply outruns the burst: the way out
+ *           is breaking line of sight, a safe zone, a light in its face or baliktad.
  *
  * It can never see a player in baliktad (S3-04: shirt inside out); if that's who it was stalking or
  * chasing, it loses them at once and goes back to patrolling.
@@ -40,6 +43,19 @@ import type { GameEvent, KidState, PlayerState, Spot } from "./game.ts";
 // ─── Tuning ──────────────────────────────────────────────────────────────────────────────────
 /** Normal speed: 3 tiles/s = 150 units a tick (between an escort's 2.5 and a free player's 4). */
 export const TIK_SPEED = 150;
+/** The chase burst (S3-07, GDD v0.2): 5 tiles/s for 2 s, then 2 tiles/s for 3 s, then normal. */
+export const BURST_SPEED = 250;
+export const BURST_TICKS = 40;
+export const REST_SPEED = 100;
+export const REST_TICKS_AFTER_BURST = 60;
+
+/** How fast a chase is going `ticks` ticks after it started: burst, rest, then normal speed. */
+export function chaseSpeed(ticks: number): number {
+  if (ticks < BURST_TICKS) return BURST_SPEED;
+  if (ticks < BURST_TICKS + REST_TICKS_AFTER_BURST) return REST_SPEED;
+  return TIK_SPEED;
+}
+
 /** How far it sees a player in the dark (5 tiles), and one whose flashlight is on (9 tiles). */
 export const SIGHT_DARK = 5000;
 export const SIGHT_LIT = 9000;
@@ -71,7 +87,7 @@ export interface TikbalangState {
   readonly mode: TikMode;
   readonly target: string | null; // the player it's stalking or chasing
   readonly goal: number; // index of the patrol point (patrol) or ambush point (ambush) it heads to
-  readonly timer: number; // ticks left (wait, ambush) or ticks spent so far (stalk)
+  readonly timer: number; // ticks left (wait, ambush) or ticks spent so far (stalk, chase)
   readonly unseen: number; // ticks since it last saw its target
   readonly pressure: number; // ticks the target has been alone or escorting while stalked
   readonly faceX: number; // −1 or 1: which way it last moved left/right (the sprite flips)
@@ -138,7 +154,10 @@ export function updateTikbalang(
   events: GameEvent[],
 ): TikResult {
   const target = t.target ? players.find((p) => p.id === t.target) : undefined;
-  const speed = isLit(t, players, world.map) ? Math.floor(TIK_SPEED / 2) : TIK_SPEED;
+  // A flashlight shone at it halves whatever speed it's moving at.
+  const lit = isLit(t, players, world.map);
+  const slowed = (v: number) => (lit ? Math.floor(v / 2) : v);
+  const speed = slowed(TIK_SPEED);
 
   switch (t.mode) {
     case "wait": {
@@ -205,7 +224,13 @@ export function updateTikbalang(
       if (!target || target.baliktad > 0) return still(toPatrol(t, rng, world));
       const unseen = canSee(t, target, world) ? 0 : t.unseen + 1;
       if (unseen >= LOSE_SIGHT_TICKS) return still(toPatrol(t, rng, world));
-      const moved = walk({ ...t, unseen }, target, speed, world);
+      // S3-07: burst, rest, then normal speed, counted from the start of this chase.
+      const moved = walk(
+        { ...t, unseen, timer: t.timer + 1 },
+        target,
+        slowed(chaseSpeed(t.timer)),
+        world,
+      );
       if (dist2(moved, target) <= CATCH_RANGE * CATCH_RANGE) {
         events.push({ type: "caught", player: target.id });
         const rest = { ...moved, mode: "wait", target: null, timer: REST_TICKS } as const;
