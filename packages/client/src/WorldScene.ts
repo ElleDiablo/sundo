@@ -50,6 +50,10 @@
  * among the players (so the darkness hides it unless it's lit), and while it stalks or chases, its
  * eye is drawn again above the darkness: a glint in the dark is all you see coming.
  *
+ * Getting caught (S3-03): the host's engine drops a caught player in the bamboo grove and scatters
+ * their children. Snapshots carry the last catch (`caught`: who, which tick); a new one fires the
+ * scene event "naligaw" (player id, and whether it's me) for the message, the sound and a shake.
+ *
  * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
  * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
  * so everyone draws the same speech bubble ("Dito!") over my tanod.
@@ -244,6 +248,8 @@ export class WorldScene extends Phaser.Scene {
   private houseLabels = new Map<string, Phaser.GameObjects.Text>();
   /** Children already known to be home, to notice a new one (sound, toast). Undefined = not yet read. */
   private knownHome: Set<string> | undefined;
+  /** The tick of the last catch already announced (S3-03). Undefined = not read yet. */
+  private knownCaught: number | null | undefined;
   /** Tells the page the round's counter; called only when something it shows changes (S2-04). */
   private onRound: OnRound | undefined;
   /** The last RoundInfo passed to onRound, as text, to call it only on a change. */
@@ -346,6 +352,7 @@ export class WorldScene extends Phaser.Scene {
       tikSpawn: findTiledPoint(tiled, "spawns", "tikbalang"),
       patrol: findTiledPoints(tiled, "spawns", "patrol"),
       ambush: findTiledPoints(tiled, "spawns", "ambush"),
+      grove: findTiledPoints(tiled, "spawns", "grove"), // S3-03: where the caught wake up
     });
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
@@ -704,6 +711,8 @@ export class WorldScene extends Phaser.Scene {
             },
           }
         : {}),
+      // S3-03: the last catch, so guests announce it too.
+      ...(this.state.lastCaught ? { caught: this.state.lastCaught } : {}),
       dawn: this.state.dawn, // S2-05: the timer (frozen once the round has ended)
       timesLost: this.state.timesLost, // S2-05: for the score
     };
@@ -898,6 +907,15 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     this.knownHome = new Set(home);
+
+    // S3-03: a new catch → "naligaw" (who, and whether it's me). The first read only records it.
+    const caught = this.guest ? latest?.caught : (this.state.lastCaught ?? undefined);
+    const caughtTick = caught?.tick ?? null;
+    if (this.knownCaught !== undefined && caught && caughtTick !== this.knownCaught) {
+      this.events.emit("naligaw", caught.player, caught.player === this.localId);
+      if (caught.player === this.localId) this.cameras.main.shake(400, 0.01);
+    }
+    this.knownCaught = caughtTick;
   }
 
   /**

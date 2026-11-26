@@ -1,7 +1,7 @@
 /**
  * Tests for the tikbalang (S3-02): grace period, patrol, what it can see (range, light, walls,
  * safe zones), stalk → chase, catching, losing sight, ambush, being slowed by a flashlight, and
- * determinism. A 20 × 12 room with one wall segment keeps each case easy to picture:
+ * determinism; and getting caught (S3-03): naligaw in the grove, scattered children, the score. A 20 × 12 room with one wall segment keeps each case easy to picture:
  *
  *   x: 0         10        19
  *      ####################   y 0
@@ -14,7 +14,7 @@
  *      …                      y 11 = wall
  */
 import { describe, expect, it } from "vitest";
-import { createGame, startRound, step, type GameState, type Inputs } from "./game.ts";
+import { createGame, startRound, step, teamScore, type GameState, type Inputs } from "./game.ts";
 import { mapFromRows } from "./map.ts";
 import {
   AMBUSH_RANGE,
@@ -211,5 +211,50 @@ describe("the tikbalang (S3-02)", () => {
 
   it("catches within 0.7 tiles", () => {
     expect(CATCH_RANGE).toBe(700);
+  });
+});
+
+describe("getting caught: naligaw (S3-03)", () => {
+  const grove = [{ tileX: 2, tileY: 9 }];
+  const kidSpots = [
+    { tileX: 17, tileY: 1 },
+    { tileX: 13, tileY: 9 },
+    { tileX: 12, tileY: 9 },
+  ];
+  // The tikbalang one step from catching p0, who leads two children.
+  const caughtSoon = () => {
+    const state = round({ x: 14500 - 800, y: 8500, mode: "chase", target: "p0" }, 14, 8, {
+      grove,
+      kidSpots,
+    });
+    return {
+      ...state,
+      kids: [
+        { id: "k0", x: 14500, y: 7700, following: "p0" },
+        { id: "k1", x: 14500, y: 6900, following: "p0" },
+        { id: "k2", x: 12500, y: 9500, following: null }, // lost, on spot (12, 9)
+      ],
+    };
+  };
+
+  it("drops the caught player in the bamboo grove and counts a time lost", () => {
+    const { state, events } = run(caughtSoon(), {}, 1);
+    expect(events).toContainEqual({ type: "caught", player: "p0" });
+    expect(state.players[0]).toMatchObject({ x: 2500, y: 9500 });
+    expect(state.timesLost).toBe(1);
+    expect(state.lastCaught).toEqual({ player: "p0", tick: 1 }); // the tick it happened on
+  });
+
+  it("scatters their children to the nearest free hiding spots", () => {
+    const { state } = run(caughtSoon(), {}, 1);
+    const k0 = state.kids.find((k) => k.id === "k0")!;
+    const k1 = state.kids.find((k) => k.id === "k1")!;
+    expect(k0).toMatchObject({ following: null, x: 13500, y: 9500 }); // (13, 9): (12, 9) is taken
+    expect(k1).toMatchObject({ following: null, x: 17500, y: 1500 }); // the next free one
+  });
+
+  it("costs 25 points in the team score", () => {
+    const { state } = run(caughtSoon(), {}, 1);
+    expect(teamScore({ saved: 0, dawn: 0, timesLost: state.timesLost })).toBe(-25);
   });
 });

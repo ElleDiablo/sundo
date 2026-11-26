@@ -63,3 +63,14 @@ export function playDawn(): void {
   note(ctx, 392.0, 0, 0.9, 0.12); // G4
   note(ctx, 261.63, 0.35, 1.4, 0.12); // C4
 }
+
+/** Someone was caught by the tikbalang (S3-03): a low, falling moan, a little louder if it's me. */
+export function playCaught(me: boolean): void {
+  const ctx = audio();
+  if (!ctx) return;
+  void ctx.resume();
+  const volume = me ? 0.2 : 0.1;
+  note(ctx, 220, 0, 0.5, volume); // A3
+  note(ctx, 174.61, 0.2, 0.6, volume); // F3
+  note(ctx, 116.54, 0.45, 1.2, volume); // B♭2
+}

@@ -817,6 +817,14 @@ const AMBUSH: [number, number][] = [
   [35, 21], // a dike junction in the paddies
   [8, 27], // deep in the grove
 ];
+// Where a caught player wakes up, lost (S3-03): along the bamboo grove's trail and its edge.
+const NALIGAW_SPOTS: [number, number][] = [
+  [2, 27],
+  [5, 27],
+  [11, 27],
+  [15, 27],
+  [3, 24],
+];
 
 // Safe zones (S3-01), as [tile x, tile y, width, height]: candle-lit, batteries recharge, and the
 // tikbalang can't go in (S3-02). The plaza is the 9 × 4 stone square; the store zone covers the
@@ -841,7 +849,7 @@ const tmj = {
   nextlayerid: 8,
   // The id Tiled gives the next object drawn by hand: past every id used below (lights 2…,
   // kid spots 100…, homes 200…, safe zones 300…, tikbalang points 400…), so a hand-added object never clashes with a generated one.
-  nextobjectid: 400 + 1 + PATROL.length + AMBUSH.length,
+  nextobjectid: 400 + 1 + PATROL.length + AMBUSH.length + NALIGAW_SPOTS.length,
   layers: [
     ...(["ground", "decor", "objects", "above"] as const).map((name, i) => ({
       id: i + 1,
@@ -919,6 +927,7 @@ const tmj = {
           ["tikbalang", TIK_SPAWN] as const,
           ...PATROL.map((p) => ["patrol", p] as const),
           ...AMBUSH.map((p) => ["ambush", p] as const),
+          ...NALIGAW_SPOTS.map((p) => ["grove", p] as const), // S3-03
         ].map(([name, [tx, ty]], i) => ({
           id: 400 + i,
           name,
