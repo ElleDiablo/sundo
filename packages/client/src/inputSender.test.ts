@@ -21,6 +21,16 @@ describe("InputSender", () => {
     expect(s.update(up, 1000)).toEqual({ seq: 2, ...up });
   });
 
+  it("remembers the last message sent, for prediction (NET-01)", () => {
+    const s = new InputSender();
+    expect(s.current).toBeUndefined();
+    s.update(up, 0);
+    s.update(left, 40); // held back by the 100 ms gap: not sent yet, so not current either
+    expect(s.current).toEqual({ seq: 1, keys: up });
+    s.update(left, 100);
+    expect(s.current).toEqual({ seq: 2, keys: left });
+  });
+
   it("sends a change at most every 100 ms, but never loses it", () => {
     const s = new InputSender();
     s.update(up, 0);

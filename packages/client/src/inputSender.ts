@@ -18,6 +18,7 @@
  */
 import type { MoveInput } from "@sundo/engine";
 import type { InputFields } from "@sundo/server/messages";
+import type { TickInput } from "./prediction.ts";
 
 /** At most one input message per 100 ms (10 a second). */
 export const INPUT_MIN_GAP_MS = 100;
@@ -34,6 +35,14 @@ export class InputSender {
   private lastSentAt = -Infinity;
   /** When each not-yet-acknowledged message was sent: seq → time in ms. */
   private readonly sentAt = new Map<number, number>();
+
+  /**
+   * The last message sent (seq + keys), or undefined before the first. This is what the host is
+   * (or soon will be) applying for me, so it's what client-side prediction steps with (NET-01).
+   */
+  get current(): TickInput | undefined {
+    return this.lastKeys && { seq: this.seq, keys: this.lastKeys };
+  }
 
   /**
    * Called every frame with the keys held right now. Returns the message to send now, or
