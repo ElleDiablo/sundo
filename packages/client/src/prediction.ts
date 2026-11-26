@@ -135,6 +135,10 @@ export class Predictor {
       rngState: 0,
       kidSpots: [],
       kids: host.kids ?? [],
+      // No houses: taking a child home isn't predicted. The host decides it, and the next
+      // snapshot (without that child) removes them from my line about one round trip later.
+      homes: [],
+      home: [],
       players: [{ id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0 }],
     };
     let previous = state;

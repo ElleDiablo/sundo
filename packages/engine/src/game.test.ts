@@ -2,7 +2,8 @@
  * Tests for the game rules: creating a game, adding players, and step() (speed, walls, sliding,
  * determinism), plus the lobby (S2-01): looks, the host's Start and the full-room countdown, and
  * the lost children (S2-02): 5 of the map's hiding spots, chosen with the seeded generator, and
- * escorting them (S2-03): calling with E, the trailing line, escort speed.
+ * escorting them (S2-03): calling with E, the trailing line, escort speed, and taking them home
+ * (S2-04): a following child at their own doorway goes inside.
  * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
@@ -14,7 +15,9 @@ import {
   FOLLOW_GAP,
   FULL_ROOM,
   HAT_COUNT,
+  HOME_RANGE,
   KID_COUNT,
+  kidHome,
   MAX_ESCORT,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
@@ -519,5 +522,91 @@ describe("escorting children (S2-03)", () => {
         25,
       );
     expect(go().kids).toEqual(go().kids);
+  });
+});
+
+describe("taking a child home (S2-04)", () => {
+  // The 12 × 12 room with two "houses": k0 lives at tile (8, 2), k1 at (2, 8). A started round
+  // with the children placed by hand, like the escort tests. p0 stands at tile (8, 3), centre
+  // (8500, 3500): children placed less than FOLLOW_GAP from there don't move on the next tick.
+  const homes = [
+    { tileX: 8, tileY: 2 },
+    { tileX: 2, tileY: 8 },
+  ];
+  const round = (kids: [number, number, string | null][]) => ({
+    ...startRound(createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 3 }], { homes })),
+    kids: kids.map(([x, y, following], i) => ({ id: `k${i}`, x, y, following })),
+  });
+
+  it("knows which house is whose: k<n> lives at homes[n]", () => {
+    expect(kidHome(homes, "k0")).toEqual({ tileX: 8, tileY: 2 });
+    expect(kidHome(homes, "k1")).toEqual({ tileX: 2, tileY: 8 });
+    expect(kidHome(homes, "k2")).toBeUndefined(); // no third house on this map
+    expect(kidHome(homes, "kx")).toBeUndefined();
+  });
+
+  it("starts every round with nobody home", () => {
+    const game = createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 4 }], { homes });
+    expect(game.home).toEqual([]);
+    expect(game.homes).toEqual(homes);
+  });
+
+  it("takes a following child inside at their doorway, with an event", () => {
+    // k0 follows p0 and stands 0.9 tiles below their doorway's centre (8500, 2500).
+    const start = round([[8500, 2500 + 900, "p0"]]);
+    const { state, events } = step(start, {});
+    expect(state.kids).toEqual([]);
+    expect(state.home).toEqual(["k0"]);
+    expect(events).toEqual([{ type: "kid_home", kid: "k0", player: "p0" }]);
+  });
+
+  it("doesn't take a child in just outside HOME_RANGE", () => {
+    const start = round([[8500, 2500 + HOME_RANGE + 1, "p0"]]);
+    // k0 is 1 unit from p0, well within FOLLOW_GAP, so it doesn't move.
+    const { state, events } = step(start, {});
+    expect(state.kids).toHaveLength(1);
+    expect(events).toEqual([]);
+  });
+
+  it("only takes a child into THEIR house, not someone else's", () => {
+    // k1 (who lives at (2, 8)) is led to k0's doorway.
+    const start = round([
+      [0, 0, null], // k0, lost somewhere else (a placeholder so the next one is k1)
+      [8500, 2500 + 500, "p0"],
+    ]);
+    expect(step(start, {}).state.home).toEqual([]);
+  });
+
+  it("leaves a lost child near their own house where they are: someone has to bring them", () => {
+    const start = round([[8500, 2500 + 500, null]]);
+    const { state } = step(start, {});
+    expect(state.kids).toHaveLength(1);
+    expect(state.home).toEqual([]);
+  });
+
+  it("works end to end: call a child with E, walk them to the doorway, they go in", () => {
+    // p0 at (8, 3); k0 a tile below. Call, walk up to the doorway at (8, 2), and keep going.
+    let state: GameState = round([[8500, 4500, null]]);
+    state = step(state, { p0: { ...NONE, call: true } }).state;
+    expect(state.kids[0]!.following).toBe("p0");
+    let homeAt: number | undefined;
+    for (let t = 0; t < 60 && homeAt === undefined; t++) {
+      const result = step(state, { p0: hold({ up: true }) });
+      state = result.state;
+      if (result.events.some((e) => e.type === "kid_home")) homeAt = t;
+    }
+    expect(homeAt).toBeDefined();
+    expect(state.home).toEqual(["k0"]);
+  });
+
+  it("refuses a doorway inside a wall", () => {
+    const bad = () =>
+      createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }], { homes: [{ tileX: 0, tileY: 0 }] });
+    expect(bad).toThrow(RangeError);
+  });
+
+  it("clears last round's children when a new round starts", () => {
+    const done = { ...round([]), home: ["k0"], phase: "lobby" as const };
+    expect(startRound(done).home).toEqual([]);
   });
 });

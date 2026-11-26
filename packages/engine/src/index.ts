@@ -21,7 +21,7 @@ export {
   type TiledObject,
   type TiledTileset,
 } from "./tiled.ts";
-// Game state and the rules: createGame, addPlayer, startRound and the tick function step().
+// Game state and the rules: createGame, addPlayer, startRound, kidHome and the tick function step().
 export {
   addPlayer,
   CALL_RANGE,
@@ -31,7 +31,9 @@ export {
   FOLLOW_GAP,
   FULL_ROOM,
   HAT_COUNT,
+  HOME_RANGE,
   KID_COUNT,
+  kidHome,
   KID_SPEED,
   MAX_ESCORT,
   PLAYER_DIAGONAL_SPEED,

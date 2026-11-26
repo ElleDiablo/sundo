@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}] }` now (`tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[] }` now (`tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -182,6 +182,12 @@ within 1.5 tiles (at most 2 per player). A following child walks toward whoever 
 the line and stops 0.8 tiles short, colliding with walls like a player; leading slows the player
 to 2.5 tiles/s. The guest's predictor gets the snapshot's children too, so a guest's call and its
 own line react at once; children following others come from snapshots.
+
+**Going home (S2-04):** the map has 5 `home` points (each kubo's doorway); child `k<n>` lives at the
+nth. A following child within 1 tile of their own doorway leaves `kids`, joins `home` (the ids, in
+arrival order) and fires a `kid_home` event. Snapshots carry `home`, so every browser shows the same
+"Home 2 / 5" counter and plays the chime when the list grows. Going home isn't predicted: the
+predictor has no houses, so on a guest the child disappears when the next snapshot says so.
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that

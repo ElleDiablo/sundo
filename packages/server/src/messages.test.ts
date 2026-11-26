@@ -138,6 +138,10 @@ describe("input and snapshot messages", () => {
       { ...snapshot, kids: Array.from({ length: 9 }, (_, i) => ({ id: `k${i}`, x: 0, y: 0 })) },
       { ...snapshot, kids: [{ id: "k0", x: "here", y: 0 }] },
       { ...snapshot, kids: [{ id: "k0", x: 0, y: 0, following: 3 }] },
+      { ...snapshot, home: "k0" },
+      { ...snapshot, home: [3] },
+      { ...snapshot, home: ["a-very-long-id"] },
+      { ...snapshot, home: Array.from({ length: 9 }, (_, i) => `k${i}`) },
     ]) {
       expect(readSnapshotBody(JSON.stringify(bad)), JSON.stringify(bad)).toBeUndefined();
     }
@@ -172,5 +176,10 @@ describe("input and snapshot messages", () => {
       { id: "k1", x: 3, y: 4 },
     ];
     expect(readSnapshotBody(JSON.stringify({ ...snapshot, kids }))).toEqual({ ...snapshot, kids });
+  });
+
+  it("passes on which children are home (S2-04)", () => {
+    const round = { ...snapshot, phase: "round", kids: [], home: ["k3", "k0"] };
+    expect(readSnapshotBody(JSON.stringify(round))).toEqual(round);
   });
 });

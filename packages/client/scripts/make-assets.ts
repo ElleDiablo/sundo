@@ -16,8 +16,9 @@
  * Layers (drawn bottom to top; the player sits between objects and above):
  *   ground   grass, paths, water, dikes, plaza          decor    tufts, flowers, pebbles, leaves
  *   objects  walls, stilts, trunks, stalk bases, fences  above    roofs, canopies, bamboo tops
- *   lights   point objects where a warm glow is drawn     spawns   the "player" point, and 12
- *                                                                  "kid" hiding spots (S2-02)
+ *   lights   point objects where a warm glow is drawn     spawns   the "player" point, 12
+ *                                                                  "kid" hiding spots (S2-02), and
+ *                                                                  5 "home" doorways (S2-04)
  * A tile blocks movement if its tileset entry has `collides = true` (read by the engine).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -652,6 +653,7 @@ path(1, 27, 16, 1);
   });
 }
 // Buildings: [x, y] is the top-left tile. Kubo door/ladder is column 4 of 7.
+// The order matters (S2-04): child k0 (Tala) lives in the first house, k1 in the second, and so on.
 const houses: [number, number][] = [
   [3, 2],
   [32, 2],
@@ -802,7 +804,9 @@ const tmj = {
   tilewidth: 16,
   tileheight: 16,
   nextlayerid: 7,
-  nextobjectid: lights.length + 2,
+  // The id Tiled gives the next object drawn by hand: past every id used below (lights 2…,
+  // kid spots 100…, homes 200…), so a hand-added object never clashes with a generated one.
+  nextobjectid: 200 + houses.length,
   layers: [
     ...(["ground", "decor", "objects", "above"] as const).map((name, i) => ({
       id: i + 1,
@@ -860,6 +864,21 @@ const tmj = {
           rotation: 0,
           visible: true,
         },
+        // S2-04: each kubo's doorway, the one open tile in its bottom row (row 5, column 4: see
+        // KUBO's `collides` rule). In the same order as `houses`, so the nth "home" point is
+        // child k<n>'s house. Leading a child here takes them home.
+        ...houses.map(([hx, hy], i) => ({
+          id: 200 + i,
+          name: "home",
+          type: "",
+          point: true,
+          x: (hx + 4) * 16 + 8,
+          y: (hy + 5) * 16 + 8,
+          width: 0,
+          height: 0,
+          rotation: 0,
+          visible: true,
+        })),
         // S2-02: the 12 places a lost child can be hiding. Spread over the whole map, off the
         // main paths: corners, behind houses, the bamboo grove, a paddy dike, the south field.
         ...KID_SPOTS.map(([tx, ty], i) => ({
@@ -1060,5 +1079,5 @@ writeFileSync(join(out, "sprites", "kids.png"), kidsSheet.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
 console.log(
-  `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${kidsData.kids.length} kids, ${KID_SPOTS.length} kid spots, ${lights.length} lights, map ${W}×${H}`,
+  `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${kidsData.kids.length} kids, ${KID_SPOTS.length} kid spots, ${houses.length} homes, ${lights.length} lights, map ${W}×${H}`,
 );

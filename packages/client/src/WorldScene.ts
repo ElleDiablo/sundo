@@ -29,6 +29,12 @@
  * over the nearest one in reach. A guest predicts its own line too (Predictor gets the kids), so
  * calling and leading feel instant. The page hears about it through the scene event "escort".
  *
+ * Going home (S2-04): each child lives in one of the map's 5 houses (the "home" points: k0 in the
+ * first, …). While a child follows me, a label ("Tala's house") marks their doorway, pinned to the
+ * edge of the screen with an arrow when the house is off screen. The engine takes a child inside
+ * at their doorway; snapshots carry who is home (`home`), and `onRound` tells the page so it can
+ * update the "Home 2 / 5" counter, while the scene event "kid_home" (with the name) plays the sound.
+ *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
@@ -48,11 +54,13 @@ import {
   TICK_MS,
   TILE_SIZE_PX,
   UNITS_PER_TILE,
+  kidHome,
   type GameState,
   type KidState,
   type Phase,
   type PlayerInput,
   type PlayerState,
+  type Spot,
   type TiledMap,
   type TileMap,
 } from "@sundo/engine";
@@ -81,6 +89,14 @@ export interface Look {
 
 /** What the page needs to show about the lobby: the phase, and whole seconds left on the countdown. */
 export type OnLobby = (phase: Phase, countdownSeconds: number | null) => void;
+
+/** What the page shows during a round (S2-04): how many children are home, out of how many. */
+export interface RoundInfo {
+  readonly phase: Phase;
+  readonly home: number;
+  readonly total: number;
+}
+export type OnRound = (info: RoundInfo) => void;
 
 /** Moonlit night: every colour is multiplied by this (lighting proper comes in S3-01). */
 const NIGHT_TINT = 0x9ea8d9;
@@ -123,6 +139,16 @@ export class WorldScene extends Phaser.Scene {
   private callHint!: Phaser.GameObjects.Text;
   /** Children following me last frame, to notice a new one (for the "escort" event). */
   private myEscort = new Set<string>();
+  /** Each house's doorway (the map's "home" points, S2-04): child k<n> lives at homes[n]. */
+  private homes: readonly Spot[] = [];
+  /** "Tala's house" over the doorway of each child following me, by child id (S2-04). */
+  private houseLabels = new Map<string, Phaser.GameObjects.Text>();
+  /** Children already known to be home, to notice a new one (sound, toast). Undefined = not yet read. */
+  private knownHome: Set<string> | undefined;
+  /** Tells the page the round's counter; called only when something it shows changes (S2-04). */
+  private onRound: OnRound | undefined;
+  /** The last RoundInfo passed to onRound, as text, to call it only on a change. */
+  private shownRound = "";
   /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
   private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
@@ -196,9 +222,11 @@ export class WorldScene extends Phaser.Scene {
     // the host's game matters: a guest's engine stops when it joins a room.
     const seed = crypto.getRandomValues(new Uint32Array(1))[0]!;
     const kidSpots = findTiledPoints(tiled, "spawns", "kid");
+    this.homes = findTiledPoints(tiled, "spawns", "home"); // S2-04: the houses, k0's first
     this.state = createGame(this.map, [{ id: this.localId, ...this.spawn, ...this.look }], {
       seed,
       kidSpots,
+      homes: this.homes,
     });
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
@@ -393,6 +421,12 @@ export class WorldScene extends Phaser.Scene {
     this.shownLobby = { phase: undefined, seconds: null }; // report the current state on the next frame
   }
 
+  /** The page wants the round's counter (S2-04): called now-ish, then whenever it changes. */
+  listenToRound(onRound: OnRound): void {
+    this.onRound = onRound;
+    this.shownRound = ""; // report on the next frame
+  }
+
   /** My current hat and shirt (the picker shows these as selected). */
   get myLook(): Look {
     return this.look;
@@ -419,6 +453,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.guest) this.updateGuest(this.guest, delta, now);
     else this.updateHost(delta, now);
     this.reportLobby();
+    this.reportRound();
     // Candles flicker a little (each one slightly out of step with the others).
     this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
   }
@@ -486,6 +521,7 @@ export class WorldScene extends Phaser.Scene {
       kids: this.state.kids.map(({ id, x, y, following }) =>
         following === null ? { id, x, y } : { id, x, y, following },
       ),
+      home: this.state.home, // S2-04: who is home (the counter, and the guests' sound)
     };
     // The countdown only while it runs (`exactOptionalPropertyTypes`: no `countdown: undefined`).
     this.sendSnapshot(countdown === null ? snapshot : { ...snapshot, countdown });
@@ -565,6 +601,35 @@ export class WorldScene extends Phaser.Scene {
     this.brownout.setVisible(phase === "round");
     this.shownLobby = { phase, seconds };
     this.onLobby?.(phase, seconds);
+  }
+
+  /**
+   * The round's counter (S2-04): which children are home, read from my engine (host) or the newest
+   * snapshot (guest). A child who wasn't home last frame fires the scene event "kid_home" with
+   * their name (the page plays a sound and says so); the very first read only records who's home,
+   * so joining mid-round doesn't chime for children brought home before I arrived.
+   */
+  private reportRound(): void {
+    const latest = this.guest?.buffer.latest;
+    if (this.guest && !latest) return;
+    const phase = this.guest ? (latest?.phase ?? "lobby") : this.state.phase;
+    const home = this.guest ? (latest?.home ?? []) : this.state.home;
+    const lost = this.guest ? (latest?.kids?.length ?? 0) : this.state.kids.length;
+
+    // The counter first, so a "kid_home" listener already sees the new numbers.
+    const info: RoundInfo = { phase, home: home.length, total: home.length + lost };
+    const text = JSON.stringify(info);
+    if (text !== this.shownRound) {
+      this.shownRound = text;
+      this.onRound?.(info);
+    }
+
+    if (this.knownHome) {
+      for (const id of home) {
+        if (!this.knownHome.has(id)) this.events.emit("kid_home", KID_NAMES[kidRow(id)], info);
+      }
+    }
+    this.knownHome = new Set(home);
   }
 
   /**
@@ -672,12 +737,67 @@ export class WorldScene extends Phaser.Scene {
       this.callHint.setPosition(Math.round(toPx(lost.x)), Math.round(toPx(lost.y)) - 22);
     }
 
+    // Their houses: a label over the doorway of each child following me (as drawn: on a guest
+    // that includes a call I've only predicted so far, so the label shows up at once).
+    this.drawHouseLabels(kids.filter((k) => k.following === this.localId).map((k) => k.id));
+
     // A child newly following me → tell the page (it shows "Tala is following you").
     const mine = new Set(confirmed.filter((k) => k.following === this.localId).map((k) => k.id));
     for (const id of mine) {
       if (!this.myEscort.has(id)) this.events.emit("escort", KID_NAMES[kidRow(id)]);
     }
     this.myEscort = mine;
+  }
+
+  /**
+   * "Tala's house" over the doorway of each of these children (S2-04). If the doorway is off screen,
+   * the label is pinned to the screen's edge in its direction, with an arrow pointing that way,
+   * so I always know which way to lead them. Labels of children no longer listed are removed.
+   */
+  private drawHouseLabels(ids: readonly string[]): void {
+    for (const [id, label] of this.houseLabels) {
+      if (ids.includes(id)) continue;
+      label.destroy();
+      this.houseLabels.delete(id);
+    }
+    const view = this.cameras.main.worldView; // the part of the world on screen, in pixels
+    // Keep clear of the room badge and the counter along the top (page elements over the canvas).
+    const margin = 6;
+    const topBar = 16;
+    for (const id of ids) {
+      const door = kidHome(this.homes, id);
+      if (!door) continue;
+      let label = this.houseLabels.get(id);
+      if (!label) {
+        label = this.add
+          .text(0, 0, "", {
+            fontFamily: "monospace",
+            fontSize: "8px",
+            color: "#ddd7c6",
+            backgroundColor: "#0b0e16cc",
+            padding: { x: 2, y: 1 },
+            resolution: 4,
+          })
+          .setOrigin(0.5, 1)
+          .setDepth(DEPTH.glow + 1);
+        this.houseLabels.set(id, label);
+      }
+      // The doorway's centre in pixels; the label sits just above it (on the house's wall).
+      const x = (door.tileX + 0.5) * TILE_SIZE_PX;
+      const y = door.tileY * TILE_SIZE_PX - 2;
+      // Pin it inside the visible area, and say which way(s) it was pushed.
+      const left = view.x + margin + 30;
+      const right = view.right - margin - 30;
+      const top = view.y + margin + topBar + 12; // + 12: the label hangs above its point
+      const bottom = view.bottom - margin;
+      const px = Phaser.Math.Clamp(x, left, right);
+      const py = Phaser.Math.Clamp(y, top, bottom);
+      const arrow =
+        (y < top ? "↑" : y > bottom ? "↓" : "") + (x < left ? "←" : x > right ? "→" : "");
+      const name = KID_NAMES[kidRow(id)];
+      label.setText(arrow ? `${arrow} ${name}'s house` : `${name}'s house`);
+      label.setPosition(Math.round(px), Math.round(py));
+    }
   }
 
   /** Makes a sprite for a player; the camera follows it if it's mine. draw() sets its look. */
