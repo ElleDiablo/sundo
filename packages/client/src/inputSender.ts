@@ -77,7 +77,7 @@ export class InputSender {
     this.sentAt.set(this.seq, nowMs);
     // If acks stop coming (host gone), don't let the map grow forever: forget the oldest.
     if (this.sentAt.size > 100) this.sentAt.delete(this.sentAt.keys().next().value!);
-    const { up, down, left, right, hat, shirt, call } = keys;
+    const { up, down, left, right, hat, shirt, call, emote } = keys;
     const message: { -readonly [K in keyof InputFields]: InputFields[K] } = {
       seq: this.seq,
       up,
@@ -89,6 +89,10 @@ export class InputSender {
     if (hat !== undefined) message.hat = hat;
     if (shirt !== undefined) message.shirt = shirt;
     if (call) message.call = true; // only while E is held (S2-03)
+    // S2-06: the emote while 1–4 is (just) pressed. Every field is copied one by one on purpose
+    // (only known fields go on the wire), so a new input field must be added here too: the emote
+    // was missing at first, and guests' emotes never reached the host.
+    if (emote !== undefined) message.emote = emote;
     return message;
   }
 
