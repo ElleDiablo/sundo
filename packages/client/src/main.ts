@@ -136,7 +136,11 @@ setupLobby(
         // S3-01: my flashlight battery, as a percentage.
         hud.textContent =
           `Dawn ${clock(info.secondsLeft)} · Home ${info.home} / ${info.total}` +
-          ` · Light ${info.battery}%`;
+          ` · Light ${info.battery}%` +
+          // S3-04: when Q (baliktad) works again.
+          (info.phase === "round"
+            ? ` · Q ${info.baliktadIn > 0 ? `${info.baliktadIn}s` : "ready"}`
+            : "");
       }
       result.show(info);
       // The moment the round ends (not when someone joins an ended round: that's from "round").

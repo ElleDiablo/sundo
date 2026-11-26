@@ -87,6 +87,12 @@ export const HOME_RANGE = 1000;
 export const BATTERY_MAX = 90 * 20;
 export const BATTERY_RECHARGE = 6;
 
+// Baliktad (S3-04, GDD §5): Q turns my shirt inside out, an old belief that hides you from a
+// tikbalang. It can't see me for 5 s (100 ticks), then I need to wait 30 s (600 ticks, counted
+// from when I pressed Q) before I can do it again. Only during the round.
+export const BALIKTAD_TICKS = 100;
+export const BALIKTAD_COOLDOWN = 600;
+
 // Emotes (S2-06, ADR-0005: no free-text chat). Four of them; the client decides the words
 // (packages/client/src/emotes.ts: 0 = "Dito!", 1 = "Takbo!", 2 = "Tulong!", 3 = "Salamat!").
 export const EMOTE_COUNT = 4;
@@ -126,6 +132,7 @@ export interface PlayerInput extends MoveInput {
   readonly call?: boolean; // E held: call the nearest lost child in range (S2-03)
   readonly emote?: number; // 1–4 pressed: show emote 0 … EMOTE_COUNT - 1 (S2-06)
   readonly light?: boolean; // Space held: flashlight on, if the battery has any left (S3-01)
+  readonly baliktad?: boolean; // Q pressed: shirt inside out, if it's ready (S3-04)
 }
 
 // One player's state. More fields arrive in later sprints (flashlight, escorting, baliktad).
@@ -142,6 +149,8 @@ export interface PlayerState {
   readonly faceY: number;
   readonly light: boolean; // flashlight on this tick (Space held and battery left)
   readonly battery: number; // ticks of light left, 0 … BATTERY_MAX
+  readonly baliktad: number; // ticks left of being invisible to the tikbalang (S3-04); 0 = visible
+  readonly baliktadCooldown: number; // ticks until Q works again; 0 = ready
 }
 
 // A lost child (S2-02). Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
@@ -227,6 +236,8 @@ export type GameEvent =
   | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
   // The tikbalang started stalking or chasing a player (S3-02): for sounds, telemetry later.
   | { readonly type: "tikbalang"; readonly mode: TikMode; readonly player: string }
+  // A player turned their shirt inside out (S3-04): for a sound, telemetry later.
+  | { readonly type: "baliktad"; readonly player: string }
   // The tikbalang caught a player (S3-02): they're naligaw, dropped in the bamboo grove (S3-03).
   | { readonly type: "caught"; readonly player: string }
   // A player started an emote (S2-06): for telemetry later (which emotes help teams win?).
@@ -342,6 +353,8 @@ const NEW_PLAYER = {
   faceY: 1,
   light: false,
   battery: BATTERY_MAX,
+  baliktad: 0, // S3-04: visible, and Q is ready
+  baliktadCooldown: 0,
 } as const;
 
 // Whole seconds left on the dawn timer, at 20 ticks a second (index.ts TICKS_PER_SECOND; not
@@ -470,7 +483,7 @@ export function step(state: GameState, inputs: Inputs): StepResult {
     // No input → standing still with the light off (an old emote still runs out: S2-06, and the
     // battery still recharges in a safe zone: S3-01).
     if (!input) {
-      const still = updateLight(player, undefined, state);
+      const still = updateBaliktad(updateLight(player, undefined, state), undefined, state, events);
       return updateEmote(still, undefined, tick, events);
     }
     const moved = movePlayer(state.map, player, input, escorting.has(player.id));
@@ -478,8 +491,10 @@ export function step(state: GameState, inputs: Inputs): StepResult {
     const looked = inLobby ? changeLook(moved, input) : moved;
     // The flashlight and battery (S3-01).
     const lit = updateLight(looked, input, state);
+    // Baliktad (S3-04): Q, its 5 s and its cooldown.
+    const turned = updateBaliktad(lit, input, state, events);
     // Emotes work in every phase: the lobby, the round and the result screen (S2-06).
-    return updateEmote(lit, input, tick, events);
+    return updateEmote(turned, input, tick, events);
   });
 
   // The children: anyone holding E calls the nearest lost child in range, then every following
@@ -744,6 +759,28 @@ function naligaw(state: GameState, id: string, rng: Rng): GameState {
     kids,
     timesLost: state.timesLost + 1,
     lastCaught: { player: id, tick: state.tick },
+  };
+}
+
+// ─── Baliktad (private helper, S3-04) ────────────────────────────────────────────────────────
+
+// Counts down a player's baliktad and its cooldown, and starts it when Q is pressed while ready
+// during the round. Holding Q does nothing more: the cooldown is far longer than any key press.
+function updateBaliktad(
+  player: PlayerState,
+  input: PlayerInput | undefined,
+  state: GameState,
+  events: GameEvent[],
+): PlayerState {
+  if (input?.baliktad && player.baliktadCooldown === 0 && state.phase === "round") {
+    events.push({ type: "baliktad", player: player.id });
+    return { ...player, baliktad: BALIKTAD_TICKS, baliktadCooldown: BALIKTAD_COOLDOWN };
+  }
+  if (player.baliktad === 0 && player.baliktadCooldown === 0) return player;
+  return {
+    ...player,
+    baliktad: Math.max(0, player.baliktad - 1),
+    baliktadCooldown: Math.max(0, player.baliktadCooldown - 1),
   };
 }
 

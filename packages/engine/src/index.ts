@@ -56,6 +56,8 @@ export {
 // and the end of a round (S2-05): teamScore, secondsLeft, returnToLobby.
 export {
   addPlayer,
+  BALIKTAD_COOLDOWN,
+  BALIKTAD_TICKS,
   BATTERY_MAX,
   BATTERY_RECHARGE,
   CALL_RANGE,

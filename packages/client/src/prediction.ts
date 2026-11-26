@@ -186,6 +186,8 @@ export class Predictor {
           faceY: this.state ? this.me(this.state).faceY : 1,
           light: false,
           battery: host.battery ?? BATTERY_MAX,
+          baliktad: 0, // S3-04: drawn from the snapshot, not predicted
+          baliktadCooldown: 0,
         },
       ],
     };

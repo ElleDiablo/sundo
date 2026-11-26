@@ -1,7 +1,8 @@
 /**
  * Tests for the tikbalang (S3-02): grace period, patrol, what it can see (range, light, walls,
  * safe zones), stalk → chase, catching, losing sight, ambush, being slowed by a flashlight, and
- * determinism; and getting caught (S3-03): naligaw in the grove, scattered children, the score. A 20 × 12 room with one wall segment keeps each case easy to picture:
+ * determinism; getting caught (S3-03): naligaw in the grove, scattered children, the score; and
+ * baliktad (S3-04): invisible for 5 s, 30 s cooldown. A 20 × 12 room with one wall segment keeps each case easy to picture:
  *
  *   x: 0         10        19
  *      ####################   y 0
@@ -14,7 +15,16 @@
  *      …                      y 11 = wall
  */
 import { describe, expect, it } from "vitest";
-import { createGame, startRound, step, teamScore, type GameState, type Inputs } from "./game.ts";
+import {
+  BALIKTAD_COOLDOWN,
+  BALIKTAD_TICKS,
+  createGame,
+  startRound,
+  step,
+  teamScore,
+  type GameState,
+  type Inputs,
+} from "./game.ts";
 import { mapFromRows } from "./map.ts";
 import {
   AMBUSH_RANGE,
@@ -256,5 +266,36 @@ describe("getting caught: naligaw (S3-03)", () => {
   it("costs 25 points in the team score", () => {
     const { state } = run(caughtSoon(), {}, 1);
     expect(teamScore({ saved: 0, dawn: 0, timesLost: state.timesLost })).toBe(-25);
+  });
+});
+
+describe("baliktad (S3-04)", () => {
+  const Q = { p0: { ...NONE, baliktad: true } };
+
+  it("hides me from the tikbalang for 5 s, with an event", () => {
+    const state = round({ x: 11500, y: 8500 }, 14, 8); // 3 tiles away: it would see me
+    const { state: after, events } = run(state, Q, 1);
+    expect(events).toContainEqual({ type: "baliktad", player: "p0" });
+    expect(after.players[0]).toMatchObject({
+      baliktad: BALIKTAD_TICKS,
+      baliktadCooldown: BALIKTAD_COOLDOWN,
+    });
+    expect(tik(after).mode).toBe("patrol"); // didn't see me
+    const later = run(after, {}, BALIKTAD_TICKS).state; // 5 s on: visible again
+    expect(later.players[0]!.baliktad).toBe(0);
+  });
+
+  it("ends a chase on me at once", () => {
+    const state = round({ x: 11500, y: 8500, mode: "chase", target: "p0" }, 14, 8);
+    expect(tik(run(state, Q, 1).state)).toMatchObject({ mode: "patrol", target: null });
+  });
+
+  it("needs 30 s before it works again, and only works in the round", () => {
+    const used = run(round({ x: 1500, y: 9500 }, 14, 8), Q, 1).state;
+    const again = run(used, Q, 200).state; // holding Q (or pressing again) during the cooldown
+    expect(again.players[0]!.baliktad).toBe(0);
+    expect(again.players[0]!.baliktadCooldown).toBe(BALIKTAD_COOLDOWN - 200);
+    const lobby = createGame(ROOM, [{ id: "p0", tileX: 14, tileY: 8 }]);
+    expect(run(lobby, Q, 1).state.players[0]!.baliktad).toBe(0);
   });
 });
