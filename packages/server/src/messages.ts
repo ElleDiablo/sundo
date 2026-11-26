@@ -63,6 +63,15 @@ export interface SnapshotKid {
 /** The game phases a snapshot may name (S2-01 lobby / round, S2-05 won / lost). */
 const PHASES: readonly string[] = ["lobby", "round", "won", "lost"];
 
+/** The tikbalang in a snapshot (S3-02): where it is, its mode (for sounds), which way it faces. */
+export interface SnapshotTikbalang {
+  readonly x: number;
+  readonly y: number;
+  readonly mode: "wait" | "patrol" | "ambush" | "stalk" | "chase";
+  readonly faceX: number; // −1 or 1
+}
+const TIK_MODES: readonly string[] = ["wait", "patrol", "ambush", "stalk", "chase"];
+
 /** The most children a snapshot may list (5 per round; a little room for later designs). */
 const MAX_KIDS = 8;
 
@@ -101,6 +110,8 @@ export interface SnapshotFields {
   readonly dawn?: number;
   /** Times a player got lost this round (S2-05 score; always 0 until the tikbalang, S3). */
   readonly timesLost?: number;
+  /** The tikbalang (S3-02); missing outside the round. */
+  readonly tikbalang?: SnapshotTikbalang;
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -248,7 +259,19 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
 function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
-  const { tick, players, acks, ackTicks, phase, countdown, kids, home, dawn, timesLost } = v;
+  const {
+    tick,
+    players,
+    acks,
+    ackTicks,
+    phase,
+    countdown,
+    kids,
+    home,
+    dawn,
+    timesLost,
+    tikbalang,
+  } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
   const isCounts = (a: unknown): a is number[] =>
@@ -262,6 +285,8 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   // S2-05: the timer and the times-lost count are whole numbers, 0 or more.
   if (dawn !== undefined && !isCount(dawn)) return undefined;
   if (timesLost !== undefined && !isCount(timesLost)) return undefined;
+  const checkedTik = tikbalang === undefined ? undefined : readTikbalang(tikbalang);
+  if (tikbalang !== undefined && !checkedTik) return undefined;
   const checkedKids = kids === undefined ? undefined : readKids(kids);
   if (kids !== undefined && !checkedKids) return undefined;
   // S2-04: a short list of short ids (the same limits as the kids themselves).
@@ -309,6 +334,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (home !== undefined) snapshot.home = home;
   if (dawn !== undefined) snapshot.dawn = dawn;
   if (timesLost !== undefined) snapshot.timesLost = timesLost;
+  if (checkedTik) snapshot.tikbalang = checkedTik;
   return snapshot;
 }
 
@@ -327,6 +353,16 @@ function readKids(kids: unknown): SnapshotKid[] | undefined {
     checked.push(following === undefined ? { id, x, y } : { id, x, y, following });
   }
   return checked;
+}
+
+/** Checks a snapshot's tikbalang (S3-02); undefined if anything is off. Known fields only. */
+function readTikbalang(t: unknown): SnapshotTikbalang | undefined {
+  if (!t || typeof t !== "object") return undefined;
+  const { x, y, mode, faceX } = t as Record<string, unknown>;
+  if (!isCoord(x) || !isCoord(y)) return undefined;
+  if (typeof mode !== "string" || !TIK_MODES.includes(mode)) return undefined;
+  if (faceX !== 1 && faceX !== -1) return undefined;
+  return { x, y, mode: mode as SnapshotTikbalang["mode"], faceX };
 }
 
 /** Parses a JSON message body into an object, or undefined if it isn't one. */
