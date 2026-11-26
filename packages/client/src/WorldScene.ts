@@ -24,6 +24,7 @@ import Phaser from "phaser";
 import {
   addPlayer,
   createGame,
+  removePlayer,
   findTiledPoint,
   mapFromTiled,
   step,
@@ -206,6 +207,15 @@ export class WorldScene extends Phaser.Scene {
   addRemotePlayer(seat: number): void {
     this.state = addPlayer(this.state, { id: playerId(seat), ...this.spawn });
     this.previous = this.state;
+  }
+
+  /** A guest left my room (I'm the host): take their player out, and forget their keys. */
+  removeRemotePlayer(seat: number): void {
+    this.state = removePlayer(this.state, playerId(seat));
+    this.previous = this.state;
+    this.remote.delete(seat);
+    this.remoteTicks.delete(seat);
+    // Their sprite goes on the next draw(), which only draws players still in the state.
   }
 
   /** A guest's keys arrived (I'm the host). Kept until newer ones come; late, older ones are ignored. */

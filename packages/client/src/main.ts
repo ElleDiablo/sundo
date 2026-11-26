@@ -4,14 +4,15 @@
  *
  * The world starts running straight away behind the lobby. Once the lobby puts this browser in a
  * room, this file connects the world to the relay:
- *   host   player_joined → add the friend; input → their keys; my snapshots → send()
- *   guest  my keys → send(); snapshot → draw it
+ *   host   player_joined → add the friend; player_left → remove them; input → their keys;
+ *          my snapshots → send()
+ *   guest  my keys → send(); snapshot → draw it; host_left → back to the menu (S1-06)
  * A guest also shows the measured round trip (keys → host → snapshot back) in the room badge, and
  * logs a summary to the console every 50 samples (the number recorded in the S1-05 PR).
  */
 import Phaser from "phaser";
 import { LatencyStats } from "./inputSender.ts";
-import { setBadgeDetail, setupLobby, toast } from "./lobby.ts";
+import { backToMenu, setBadgeDetail, setupLobby, toast } from "./lobby.ts";
 import { onServerMessage, send } from "./net.ts";
 import { WorldScene } from "./WorldScene.ts";
 
@@ -67,6 +68,13 @@ setupLobby((room) => {
       case "player_joined": // I'm the host and a friend took a seat: show them in my world.
         world.addRemotePlayer(message.seat);
         toast(`Player ${message.seat + 1} joined`);
+        break;
+      case "player_left": // I'm the host and a friend closed their tab: no ghost left behind.
+        world.removeRemotePlayer(message.seat);
+        toast(`Player ${message.seat + 1} left`);
+        break;
+      case "host_left": // I'm a guest. Only the host ran the game, so this room is over.
+        backToMenu("The host left, so the room has ended.");
         break;
       case "input": // I'm the host: a guest's keys.
         world.receiveInput(message.seat, message);
