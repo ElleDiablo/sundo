@@ -39,6 +39,7 @@ const sameKeys = (a: PlayerInput, b: PlayerInput) =>
   a.hat === b.hat &&
   a.shirt === b.shirt &&
   !!a.call === !!b.call && // `!!` so "not sent" and false count as the same
+  !!a.light === !!b.light && // S3-01: Space (flashlight)
   a.emote === b.emote; // S2-06: pressing (or letting go of) 1–4 is a change
 
 export class InputSender {
@@ -77,7 +78,7 @@ export class InputSender {
     this.sentAt.set(this.seq, nowMs);
     // If acks stop coming (host gone), don't let the map grow forever: forget the oldest.
     if (this.sentAt.size > 100) this.sentAt.delete(this.sentAt.keys().next().value!);
-    const { up, down, left, right, hat, shirt, call, emote } = keys;
+    const { up, down, left, right, hat, shirt, call, emote, light } = keys;
     const message: { -readonly [K in keyof InputFields]: InputFields[K] } = {
       seq: this.seq,
       up,
@@ -93,6 +94,7 @@ export class InputSender {
     // (only known fields go on the wire), so a new input field must be added here too: the emote
     // was missing at first, and guests' emotes never reached the host.
     if (emote !== undefined) message.emote = emote;
+    if (light) message.light = true; // only while Space is held (S3-01)
     return message;
   }
 

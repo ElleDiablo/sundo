@@ -11,6 +11,8 @@
  *                          4 hats × 6 shirt colours (src/looks.ts), placeholder hats generated here
  *   sprites/kids.png      the 5 lost children (from my modern character sheet), 4-frame walk each
  *   sprites/glow.png      a soft warm glow, drawn additively over lit doorways and windows
+ *   sprites/light.png     a round light (white, alpha in 4 steps), cut out of the darkness (S3-01)
+ *   sprites/cone.png      the flashlight's 35°-each-side, 5-tile cone, pointing right (S3-01)
  *   maps/barangay.tmj     a 48×32 Tiled map using the tileset
  *
  * Layers (drawn bottom to top; the player sits between objects and above):
@@ -19,6 +21,7 @@
  *   lights   point objects where a warm glow is drawn     spawns   the "player" point, 12
  *                                                                  "kid" hiding spots (S2-02), and
  *                                                                  5 "home" doorways (S2-04)
+ *   zones    "safe" rectangles (S3-01): the kapilya plaza and the sari-sari store, lit and safe
  * A tile blocks movement if its tileset entry has `collides = true` (read by the engine).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -791,6 +794,14 @@ const KID_SPOTS: [number, number][] = [
   [47, 22], // east edge, past the paddies
 ];
 
+// Safe zones (S3-01), as [tile x, tile y, width, height]: candle-lit, batteries recharge, and the
+// tikbalang can't go in (S3-02). The plaza is the 9 × 4 stone square; the store zone covers the
+// store and the ground in front of it, down to (not including) the road.
+const SAFE_ZONES: [number, number, number, number][] = [
+  [19, 7, 9, 4], // kapilya plaza
+  [28, 9, 9, 7], // sari-sari store and its front
+];
+
 const tmj = {
   type: "map",
   version: "1.10",
@@ -803,10 +814,10 @@ const tmj = {
   height: H,
   tilewidth: 16,
   tileheight: 16,
-  nextlayerid: 7,
+  nextlayerid: 8,
   // The id Tiled gives the next object drawn by hand: past every id used below (lights 2…,
-  // kid spots 100…, homes 200…), so a hand-added object never clashes with a generated one.
-  nextobjectid: 200 + houses.length,
+  // kid spots 100…, homes 200…, safe zones 300…), so a hand-added object never clashes with a generated one.
+  nextobjectid: 300 + SAFE_ZONES.length,
   layers: [
     ...(["ground", "decor", "objects", "above"] as const).map((name, i) => ({
       id: i + 1,
@@ -894,6 +905,27 @@ const tmj = {
           visible: true,
         })),
       ],
+    },
+    {
+      id: 7,
+      name: "zones",
+      type: "objectgroup",
+      draworder: "topdown",
+      x: 0,
+      y: 0,
+      opacity: 1,
+      visible: true,
+      objects: SAFE_ZONES.map(([tx, ty, w, h], i) => ({
+        id: 300 + i,
+        name: "safe",
+        type: "",
+        x: tx * 16,
+        y: ty * 16,
+        width: w * 16,
+        height: h * 16,
+        rotation: 0,
+        visible: true,
+      })),
     },
   ],
   tilesets: [
@@ -1060,6 +1092,32 @@ for (let y = 0; y < 64; y++)
     glow.set(x, y, [Math.round(255 * k), Math.round(150 * k), Math.round(60 * k)], 255);
   }
 
+// Lights cut out of the darkness (S3-01). White, with the strength in the alpha channel. The
+// strength falls off in 4 hard steps instead of a smooth gradient: banded light is the "lit pixel
+// art" look (GDD §9), and it stays crisp when the canvas is scaled up.
+const band = (k: number) => (k > 0.75 ? 255 : k > 0.5 ? 205 : k > 0.25 ? 140 : k > 0 ? 70 : 0);
+const WHITE: RGB = [255, 255, 255];
+const lightImg = new Img(64, 64);
+for (let y = 0; y < 64; y++)
+  for (let x = 0; x < 64; x++) {
+    const d = Math.hypot(x + 0.5 - 32, y + 0.5 - 32) / 32;
+    if (d < 1) lightImg.set(x, y, WHITE, band(1 - d * d));
+  }
+// The cone: apex at the middle of the left edge, 80 px (5 tiles) long, 35° either side.
+const CONE_LEN = 80;
+const coneH = 2 * Math.ceil(CONE_LEN * Math.sin((35 * Math.PI) / 180)) + 2;
+const cone = new Img(CONE_LEN + 4, coneH);
+for (let y = 0; y < coneH; y++)
+  for (let x = 0; x < CONE_LEN + 4; x++) {
+    const dx = x + 0.5;
+    const dy = y + 0.5 - coneH / 2;
+    const d = Math.hypot(dx, dy) / CONE_LEN;
+    const angle = (Math.atan2(Math.abs(dy), dx) * 180) / Math.PI; // 0° = straight ahead
+    if (d >= 1 || angle >= 35) continue;
+    // Brightest near the torch and along the middle; dimmer towards the far end and the edges.
+    cone.set(x, y, WHITE, band((1 - d ** 1.6) * Math.min(1, (35 - angle) / 10)));
+  }
+
 // ─── Write ───────────────────────────────────────────────────────────────────────────────────
 const mapPath = join(out, "maps", "barangay.tmj");
 if (
@@ -1077,6 +1135,8 @@ writeFileSync(join(out, "tiles", "barangay.png"), sheet.png());
 writeFileSync(join(out, "sprites", "tanod.png"), tanod.png());
 writeFileSync(join(out, "sprites", "kids.png"), kidsSheet.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
+writeFileSync(join(out, "sprites", "light.png"), lightImg.png());
+writeFileSync(join(out, "sprites", "cone.png"), cone.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
 console.log(
   `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${kidsData.kids.length} kids, ${KID_SPOTS.length} kid spots, ${houses.length} homes, ${lights.length} lights, map ${W}×${H}`,

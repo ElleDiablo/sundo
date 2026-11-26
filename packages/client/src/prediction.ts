@@ -30,6 +30,7 @@
  * snapshot interpolation (interpolation.ts).
  */
 import {
+  BATTERY_MAX,
   ROUND_TICKS,
   step,
   type GameState,
@@ -64,6 +65,8 @@ export interface HostView {
    * prediction mustn't either; otherwise it's predicted as a round (see reconcile).
    */
   readonly phase?: Phase;
+  /** My battery at the snapshot's tick (S3-01), so a predicted flashlight runs out when the host's does. */
+  readonly battery?: number;
 }
 
 /** Corrections fade out with this time constant: after 100 ms ~37 % is left, after 300 ms ~5 %. */
@@ -152,6 +155,7 @@ export class Predictor {
       rngState: 0,
       kidSpots: [],
       kids: host.kids ?? [],
+      safeZones: [], // no recharging in the prediction: the battery comes from each snapshot
       // No houses: taking a child home isn't predicted. The host decides it, and the next
       // snapshot (without that child) removes them from my line about one round trip later.
       homes: [],
@@ -159,8 +163,22 @@ export class Predictor {
       dawn: ROUND_TICKS,
       timesLost: 0,
       // No emote: my bubble comes from the snapshot, not the prediction (S2-06).
+      // Facing starts from the last prediction (or down), so the flashlight doesn't flip on a
+      // snapshot; replaying the inputs below turns it the way I pressed (S3-01).
       players: [
-        { id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0, emote: null, emoteAt: null },
+        {
+          id: this.id,
+          x: host.x,
+          y: host.y,
+          hat: 0,
+          shirt: 0,
+          emote: null,
+          emoteAt: null,
+          faceX: this.state ? this.me(this.state).faceX : 0,
+          faceY: this.state ? this.me(this.state).faceY : 1,
+          light: false,
+          battery: host.battery ?? BATTERY_MAX,
+        },
       ],
     };
     let previous = state;
@@ -221,6 +239,13 @@ export class Predictor {
         const then = before.kids.find((b) => b.id === k.id) ?? k;
         return { ...k, x: then.x + (k.x - then.x) * alpha, y: then.y + (k.y - then.y) * alpha };
       });
+  }
+
+  /** Which way my predicted tanod faces and whether its flashlight is on (S3-01: my own cone). */
+  facing(): { faceX: number; faceY: number; light: boolean } | undefined {
+    if (!this.state) return undefined;
+    const { faceX, faceY, light } = this.me(this.state);
+    return { faceX, faceY, light };
   }
 
   private me(state: GameState) {

@@ -202,4 +202,19 @@ describe("input and snapshot messages", () => {
     const talking = { ...snapshot, players: [{ id: "p0", x: 1, y: 2, emote: 0 }] };
     expect(readSnapshotBody(JSON.stringify(talking))).toEqual(talking);
   });
+
+  it("passes on the flashlight in inputs and snapshots (S3-01), refusing bad values", () => {
+    const input = { seq: 11, up: false, down: false, left: false, right: false, light: true };
+    expect(readInputBody(JSON.stringify(input))).toEqual(input);
+    expect(readInputBody(JSON.stringify({ ...input, light: "on" }))).toBeUndefined();
+    const lit = {
+      ...snapshot,
+      players: [{ id: "p0", x: 1, y: 2, face: 5, light: true, battery: 900 }],
+    };
+    expect(readSnapshotBody(JSON.stringify(lit))).toEqual(lit);
+    for (const bad of [{ face: 9 }, { light: 1 }, { battery: -1 }]) {
+      const players = [{ id: "p0", x: 1, y: 2, ...bad }];
+      expect(readSnapshotBody(JSON.stringify({ ...snapshot, players }))).toBeUndefined();
+    }
+  });
 });
