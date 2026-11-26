@@ -62,6 +62,11 @@
  * hoofbeats.ts says how often and how loud to play a hoofbeat and how strong to draw a red arc at
  * the screen's edge, pointing at it. The ring shows whether the sound is on or not (M switches it).
  *
+ * Dogs (S3-08): four dogs sleep at the map's "dog" points; the engine wakes one for 3 s when the
+ * tikbalang passes within 5 tiles. Snapshots list who's barking (`barking`). A barking dog sits up,
+ * "Aw! Aw!" shows over it (above the darkness), and a bark plays, quieter further away. With the
+ * sound off, a yellow arc at the screen's edge points at an off-screen barking dog instead.
+ *
  * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
  * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
  * so everyone draws the same speech bubble ("Dito!") over my tanod.
@@ -114,7 +119,7 @@ import { KID_NAMES, kidRow } from "./kids.ts";
 import { Darkness, type Beam, type Glow } from "./darkness.ts";
 import { EMOTE_HOLD_MS, emoteText } from "./emotes.ts";
 import { warning } from "./hoofbeats.ts";
-import { playHoof } from "./sounds.ts";
+import { isMuted, playBark, playHoof } from "./sounds.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { INK, pixelTextStyle, placeCentred } from "./pixelText.ts";
 import { Predictor } from "./prediction.ts";
@@ -261,6 +266,10 @@ export class WorldScene extends Phaser.Scene {
   /** The red warning arc at the screen's edge (S3-05), and when the last hoofbeat played. */
   private ring!: Phaser.GameObjects.Graphics;
   private lastHoof = 0;
+  /** The dogs (S3-08): a sprite and an "Aw! Aw!" label each, by dog id; and who barked last frame. */
+  private dogSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  private dogBarks = new Map<string, Phaser.GameObjects.Text>();
+  private barking = new Set<string>();
   /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
   private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
   /** "Tala [E]" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
@@ -345,6 +354,8 @@ export class WorldScene extends Phaser.Scene {
     // The tikbalang (S3-02): 24 × 32 frames, 4-frame walk; and the same frames with only its eye.
     const tikFrames = { frameWidth: 24, frameHeight: 32 };
     this.load.spritesheet("tikbalang", "assets/sprites/tikbalang.png", tikFrames);
+    // A dog (S3-08): 16 × 12, frame 0 asleep, frame 1 barking.
+    this.load.spritesheet("dog", "assets/sprites/dog.png", { frameWidth: 16, frameHeight: 12 });
     this.load.spritesheet("tikbalang-eye", "assets/sprites/tikbalang-eye.png", tikFrames);
   }
 
@@ -378,6 +389,7 @@ export class WorldScene extends Phaser.Scene {
       patrol: findTiledPoints(tiled, "spawns", "patrol"),
       ambush: findTiledPoints(tiled, "spawns", "ambush"),
       grove: findTiledPoints(tiled, "spawns", "grove"), // S3-03: where the caught wake up
+      dogs: findTiledPoints(tiled, "spawns", "dog"), // S3-08
     });
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
@@ -419,6 +431,25 @@ export class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setDepth(DEPTH.glow + 0.5) // above the darkness
       .setVisible(false);
+    // S3-08: a sleeping dog at each dog point (the same in every browser: it's the map), with a
+    // hidden "Aw! Aw!" label over it.
+    for (const dog of this.state.dogs) {
+      const x = Math.round(toPx(dog.x));
+      const y = Math.round(toPx(dog.y) + 6);
+      this.dogSprites.set(
+        dog.id,
+        this.add
+          .sprite(x, y, "dog", 0)
+          .setOrigin(0.5, 1)
+          .setDepth(DEPTH.player + y / 10_000),
+      );
+      const label = this.add
+        .text(0, 0, "Aw! Aw!", pixelTextStyle(INK.night, INK.parchment))
+        .setOrigin(0, 1)
+        .setDepth(DEPTH.glow + 2)
+        .setVisible(false);
+      this.dogBarks.set(dog.id, placeCentred(label, x, y - 12));
+    }
     // S3-05: the warning ring, fixed to the screen, above the darkness.
     this.ring = this.add
       .graphics()
@@ -764,6 +795,10 @@ export class WorldScene extends Phaser.Scene {
         : {}),
       // S3-03: the last catch, so guests announce it too.
       ...(this.state.lastCaught ? { caught: this.state.lastCaught } : {}),
+      // S3-08: the dogs barking right now, only when there are any.
+      ...(this.state.dogs.some((d) => d.bark > 0)
+        ? { barking: this.state.dogs.filter((d) => d.bark > 0).map((d) => d.id) }
+        : {}),
       dawn: this.state.dawn, // S2-05: the timer (frozen once the round has ended)
       timesLost: this.state.timesLost, // S2-05: for the score
     };
@@ -935,6 +970,7 @@ export class WorldScene extends Phaser.Scene {
     now: number,
   ): void {
     this.ring.clear();
+    this.drawDogs(me); // S3-08 (uses the same ring graphics for its edge arcs)
     if (!t || !me) return;
     const dx = t.x - me.x;
     const dy = t.y - me.y;
@@ -953,6 +989,39 @@ export class WorldScene extends Phaser.Scene {
       .beginPath()
       .arc(width / 2, height / 2, Math.min(width, height) * 0.46, angle - 0.4, angle + 0.4)
       .strokePath();
+  }
+
+  /**
+   * The dogs (S3-08): which are barking (my engine, or the newest snapshot), each one's frame and
+   * label, a bark sound when one starts (quieter further from me, silent past 20 tiles), and, with
+   * the sound off, a yellow arc pointing at a barking dog that's off screen.
+   */
+  private drawDogs(me: { readonly x: number; readonly y: number } | undefined): void {
+    const now = this.guest
+      ? new Set(this.guest.buffer.latest?.barking ?? [])
+      : new Set(this.state.dogs.filter((d) => d.bark > 0).map((d) => d.id));
+    const view = this.cameras.main.worldView;
+    const { width, height } = this.scale;
+    for (const dog of this.state.dogs) {
+      const loud = now.has(dog.id);
+      this.dogSprites.get(dog.id)?.setFrame(loud ? 1 : 0);
+      this.dogBarks.get(dog.id)?.setVisible(loud);
+      if (!loud || !me) continue;
+      const dx = dog.x - me.x;
+      const dy = dog.y - me.y;
+      const tiles = Math.sqrt(dx * dx + dy * dy) / UNITS_PER_TILE;
+      if (!this.barking.has(dog.id)) playBark(0.12 * Math.max(0, 1 - tiles / 20));
+      const onScreen = view.contains(toPx(dog.x), toPx(dog.y));
+      if (isMuted() && !onScreen) {
+        const angle = Math.atan2(dy, dx);
+        this.ring
+          .lineStyle(3, 0xf0a24a, 0.9)
+          .beginPath()
+          .arc(width / 2, height / 2, Math.min(width, height) * 0.46, angle - 0.15, angle + 0.15)
+          .strokePath();
+      }
+    }
+    this.barking = now;
   }
 
   /**

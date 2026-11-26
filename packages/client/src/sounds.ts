@@ -119,3 +119,29 @@ export function playHoof(volume: number): void {
   thud(90, 0);
   thud(75, 0.09);
 }
+
+/**
+ * A dog barking (S3-08): two short "woofs", square waves that drop in pitch, like a small dog.
+ * `volume` is lower for dogs further away.
+ */
+export function playBark(volume: number): void {
+  const ctx = audio();
+  if (!ctx || volume <= 0.002) return;
+  void ctx.resume();
+  const woof = (at: number) => {
+    const start = ctx.currentTime + at;
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(520, start);
+    osc.frequency.exponentialRampToValueAtTime(260, start + 0.12);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.15);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + 0.2);
+  };
+  woof(0);
+  woof(0.22);
+}

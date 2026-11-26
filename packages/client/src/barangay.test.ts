@@ -88,7 +88,7 @@ describe("the barangay map's houses (S2-04)", () => {
 
 describe("the barangay map's tikbalang points and safe zones (S3-01, S3-02)", () => {
   const zones = findTiledRects(tiled, "zones", "safe");
-  const points = ["tikbalang", "patrol", "ambush", "grove"].flatMap((name) =>
+  const points = ["tikbalang", "patrol", "ambush", "grove", "dog"].flatMap((name) =>
     findTiledPoints(tiled, "spawns", name).map((p) => ({ name, ...p })),
   );
 
@@ -102,6 +102,7 @@ describe("the barangay map's tikbalang points and safe zones (S3-01, S3-02)", ()
     expect(points.filter((p) => p.name === "patrol").length).toBeGreaterThanOrEqual(4);
     expect(points.filter((p) => p.name === "ambush").length).toBeGreaterThanOrEqual(2);
     expect(points.filter((p) => p.name === "grove").length).toBeGreaterThanOrEqual(3); // S3-03
+    expect(points.filter((p) => p.name === "dog")).toHaveLength(4); // S3-08
   });
 
   it("puts every tikbalang point on reachable open ground outside the safe zones", () => {

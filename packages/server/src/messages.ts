@@ -118,6 +118,8 @@ export interface SnapshotFields {
   readonly timesLost?: number;
   /** The tikbalang (S3-02); missing outside the round. */
   readonly tikbalang?: SnapshotTikbalang;
+  /** The ids of the dogs barking right now (S3-08); missing when none is. */
+  readonly barking?: readonly string[];
   /** The last catch this round (S3-03): who, and on which tick, so each browser says "Naligaw!" once. */
   readonly caught?: { readonly player: string; readonly tick: number };
 }
@@ -280,6 +282,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     timesLost,
     tikbalang,
     caught,
+    barking,
   } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
@@ -312,6 +315,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     a.length <= MAX_KIDS &&
     a.every((id) => typeof id === "string" && id.length <= 8);
   if (home !== undefined && !isIds(home)) return undefined;
+  if (barking !== undefined && !isIds(barking)) return undefined; // S3-08: same limits
   const checked: SnapshotPlayer[] = [];
   for (const p of players as unknown[]) {
     if (!p || typeof p !== "object") return undefined;
@@ -360,6 +364,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (timesLost !== undefined) snapshot.timesLost = timesLost;
   if (checkedTik) snapshot.tikbalang = checkedTik;
   if (checkedCaught) snapshot.caught = checkedCaught;
+  if (barking !== undefined) snapshot.barking = barking;
   return snapshot;
 }
 
