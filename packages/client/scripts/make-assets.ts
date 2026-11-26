@@ -11,6 +11,8 @@
  *                          4 hats × 6 shirt colours (src/looks.ts), placeholder hats generated here
  *   sprites/kids.png      the 5 lost children (from my modern character sheet), 4-frame walk each
  *   sprites/glow.png      a soft warm glow, drawn additively over lit doorways and windows
+ *   sprites/tikbalang.png the tikbalang (from my modern character sheet), 24 × 32 frames, 4-frame walk
+ *   sprites/tikbalang-eye.png  only its eye, same frames: drawn above the darkness (S3-02)
  *   sprites/light.png     a round light (white, alpha in 4 steps), cut out of the darkness (S3-01)
  *   sprites/cone.png      the flashlight's 35°-each-side, 5-tile cone, pointing right (S3-01)
  *   maps/barangay.tmj     a 48×32 Tiled map using the tileset
@@ -794,6 +796,28 @@ const KID_SPOTS: [number, number][] = [
   [47, 22], // east edge, past the paddies
 ];
 
+// The tikbalang's points (S3-02), as [tile x, tile y]. src/barangay.test.ts checks each one is
+// open, reachable and outside the safe zones.
+const TIK_SPAWN: [number, number] = [8, 27]; // the bamboo grove trail: its home
+const PATROL: [number, number][] = [
+  [5, 17], // the road, west
+  [15, 18], // the road by the creek bridge
+  [30, 18], // the road, east of the plaza path
+  [44, 17], // the road, far east
+  [4, 27], // the grove trail, west
+  [13, 27], // the grove trail, east
+  [23, 29], // the south field
+  [35, 24], // a paddy dike
+  [12, 9], // the field west of the plaza
+  [41, 9], // the field east of the store
+];
+const AMBUSH: [number, number][] = [
+  [16, 17], // the west end of the road bridge: everyone crosses here
+  [19, 27], // the east end of the grove bridge
+  [35, 21], // a dike junction in the paddies
+  [8, 27], // deep in the grove
+];
+
 // Safe zones (S3-01), as [tile x, tile y, width, height]: candle-lit, batteries recharge, and the
 // tikbalang can't go in (S3-02). The plaza is the 9 × 4 stone square; the store zone covers the
 // store and the ground in front of it, down to (not including) the road.
@@ -816,8 +840,8 @@ const tmj = {
   tileheight: 16,
   nextlayerid: 8,
   // The id Tiled gives the next object drawn by hand: past every id used below (lights 2…,
-  // kid spots 100…, homes 200…, safe zones 300…), so a hand-added object never clashes with a generated one.
-  nextobjectid: 300 + SAFE_ZONES.length,
+  // kid spots 100…, homes 200…, safe zones 300…, tikbalang points 400…), so a hand-added object never clashes with a generated one.
+  nextobjectid: 400 + 1 + PATROL.length + AMBUSH.length,
   layers: [
     ...(["ground", "decor", "objects", "above"] as const).map((name, i) => ({
       id: i + 1,
@@ -885,6 +909,23 @@ const tmj = {
           point: true,
           x: (hx + 4) * 16 + 8,
           y: (hy + 5) * 16 + 8,
+          width: 0,
+          height: 0,
+          rotation: 0,
+          visible: true,
+        })),
+        // S3-02: where the tikbalang appears, walks and lies in wait.
+        ...[
+          ["tikbalang", TIK_SPAWN] as const,
+          ...PATROL.map((p) => ["patrol", p] as const),
+          ...AMBUSH.map((p) => ["ambush", p] as const),
+        ].map(([name, [tx, ty]], i) => ({
+          id: 400 + i,
+          name,
+          type: "",
+          point: true,
+          x: tx * 16 + 8,
+          y: ty * 16 + 8,
           width: 0,
           height: 0,
           rotation: 0,
@@ -1082,6 +1123,28 @@ kidsData.kids.forEach((kid, row) => {
   });
 });
 
+// The tikbalang (S3-02): my sprite from the modern sheet, 4-frame walk in 24 × 32 frames, plus a
+// sheet with ONLY its eye pixels, drawn above the darkness so the eye glints in the dark.
+const tikData = JSON.parse(
+  readFileSync(join(here, "sprites", "tikbalang.json"), "utf8"),
+) as SpriteData & { eye: string };
+const TW = 24,
+  TH = 32;
+const eyeRGB = C(tikData.palette[tikData.eye]!);
+const tikSheet = new Img(TW * WALK_FRAMES, TH);
+const eyeSheet = new Img(TW * WALK_FRAMES, TH);
+walkFrames(plainGrid(tikData)).forEach((f, i) => {
+  const ox = i * TW + Math.floor((TW - f[0]!.length) / 2),
+    oy = TH - f.length; // feet on the bottom of the frame
+  f.forEach((r, y) =>
+    r.forEach((c, x) => {
+      if (!c) return;
+      tikSheet.set(ox + x, oy + y, c);
+      if (c.every((v, k) => v === eyeRGB[k])) eyeSheet.set(ox + x, oy + y, [255, 244, 160]);
+    }),
+  );
+});
+
 // Warm glow for lit doorways and windows (drawn with additive blending)
 const glow = new Img(64, 64);
 for (let y = 0; y < 64; y++)
@@ -1136,6 +1199,8 @@ writeFileSync(join(out, "sprites", "tanod.png"), tanod.png());
 writeFileSync(join(out, "sprites", "kids.png"), kidsSheet.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
 writeFileSync(join(out, "sprites", "light.png"), lightImg.png());
+writeFileSync(join(out, "sprites", "tikbalang.png"), tikSheet.png());
+writeFileSync(join(out, "sprites", "tikbalang-eye.png"), eyeSheet.png());
 writeFileSync(join(out, "sprites", "cone.png"), cone.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
 console.log(

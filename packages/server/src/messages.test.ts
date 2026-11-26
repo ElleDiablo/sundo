@@ -217,4 +217,17 @@ describe("input and snapshot messages", () => {
       expect(readSnapshotBody(JSON.stringify({ ...snapshot, players }))).toBeUndefined();
     }
   });
+
+  it("passes on the tikbalang (S3-02), refusing a bad one", () => {
+    const tikbalang = { x: 8500, y: 27500, mode: "chase", faceX: -1 };
+    const round = { ...snapshot, tikbalang };
+    expect(readSnapshotBody(JSON.stringify(round))).toEqual(round);
+    for (const bad of [
+      { ...tikbalang, mode: "dance" },
+      { ...tikbalang, x: "far" },
+      { ...tikbalang, faceX: 0 },
+    ]) {
+      expect(readSnapshotBody(JSON.stringify({ ...snapshot, tikbalang: bad }))).toBeUndefined();
+    }
+  });
 });

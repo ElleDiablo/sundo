@@ -22,6 +22,7 @@
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
 import { inZone, type Zone } from "./light.ts";
 import { createRng } from "./rng.ts";
+import { spawnTikbalang, updateTikbalang, type TikbalangState, type TikMode } from "./tikbalang.ts";
 
 // ─── Tuning constants ────────────────────────────────────────────────────────────────────────
 // `export` lets other files (tests, the client) import these. `const` means they never change.
@@ -186,6 +187,13 @@ export interface GameState {
   // Lit, safe places (S3-01): the kapilya plaza and the sari-sari store. Batteries recharge in
   // them, and the tikbalang can't enter or see into them (S3-02). Fixed.
   readonly safeZones: readonly Zone[];
+  // The tikbalang (S3-02): null in the lobby (and on a map without a "tikbalang" point).
+  readonly tikbalang: TikbalangState | null;
+  // Where it appears, and the points it walks between and lies in wait at (the map's
+  // "tikbalang", "patrol" and "ambush" points). Fixed.
+  readonly tikSpawn: Spot | null;
+  readonly patrol: readonly Spot[];
+  readonly ambush: readonly Spot[];
   // Each house's doorway, in the map's order: child "k<n>" lives at homes[n] (S2-04). Fixed.
   readonly homes: readonly Spot[];
   // The ids of the children who are home this round, in the order they got there (S2-04).
@@ -213,6 +221,10 @@ export type GameEvent =
   | { readonly type: "round_started" }
   // A player called a lost child and it now follows them (S2-03): for a sound, telemetry later.
   | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
+  // The tikbalang started stalking or chasing a player (S3-02): for sounds, telemetry later.
+  | { readonly type: "tikbalang"; readonly mode: TikMode; readonly player: string }
+  // The tikbalang caught a player (S3-02); S3-03 makes them naligaw.
+  | { readonly type: "caught"; readonly player: string }
   // A player started an emote (S2-06): for telemetry later (which emotes help teams win?).
   | { readonly type: "emote"; readonly player: string; readonly emote: number }
   // A child reached their own house and went inside (S2-04). `player` is who led them there.
@@ -242,6 +254,9 @@ export interface GameOptions {
   readonly kidSpots?: readonly Spot[]; // the map's hiding spots
   readonly homes?: readonly Spot[]; // the map's house doorways, child k0's first (S2-04)
   readonly safeZones?: readonly Zone[]; // the map's safe zones (S3-01)
+  readonly tikSpawn?: Spot; // where the tikbalang appears (S3-02)
+  readonly patrol?: readonly Spot[]; // the tikbalang's patrol points (S3-02)
+  readonly ambush?: readonly Spot[]; // the tikbalang's ambush points (S3-02)
 }
 
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
@@ -294,6 +309,10 @@ export function createGame(
     homes,
     home: [],
     safeZones: options.safeZones ?? [],
+    tikbalang: null,
+    tikSpawn: options.tikSpawn ?? null,
+    patrol: options.patrol ?? [],
+    ambush: options.ambush ?? [],
     dawn: 0,
     timesLost: 0,
     players,
@@ -365,6 +384,7 @@ export function returnToLobby(
     home: [],
     dawn: 0,
     timesLost: 0,
+    tikbalang: null, // S3-02: gone until the next round
     players: [],
   };
   // Re-add each player at the spawn: addPlayer finds each one a free tile near it.
@@ -467,7 +487,16 @@ export function step(state: GameState, inputs: Inputs): StepResult {
     : { kids: moved, home: state.home };
 
   // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
-  const next: GameState = { ...state, tick, players, kids, home };
+  // `let`: the tikbalang's tick below may replace it.
+  let next: GameState = { ...state, tick, players, kids, home };
+
+  // The tikbalang's tick (S3-02), during the round only.
+  // Its random choices use the game's generator and save where it got to, like placeKids.
+  if (inRound && state.tikbalang) {
+    const rng = createRng(state.rngState);
+    const { tikbalang } = updateTikbalang(state.tikbalang, players, kids, state, rng, events);
+    next = { ...next, tikbalang, rngState: rng.state };
+  }
 
   // The round: the dawn timer counts down, and the round ends (S2-05). Every child home wins,
   // checked first, so bringing the last one in on the very last tick still counts as a win.
@@ -517,6 +546,8 @@ function beginRound(state: GameState): GameState {
     dawn: ROUND_TICKS, // S2-05: 6 minutes to dawn
     timesLost: 0,
     rngState,
+    // S3-02: the tikbalang appears at its spawn point (if the map has one), waiting out the grace.
+    tikbalang: state.tikSpawn ? spawnTikbalang(state.tikSpawn) : null,
     players: state.players.map((p) => ({ ...p, battery: BATTERY_MAX })), // S3-01: fresh batteries
   };
 }

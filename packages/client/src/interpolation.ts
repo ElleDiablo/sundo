@@ -24,7 +24,12 @@
  * snapshot doesn't shift it much.
  */
 import { TICK_MS } from "@sundo/engine";
-import type { SnapshotFields, SnapshotKid, SnapshotPlayer } from "@sundo/server/messages";
+import type {
+  SnapshotFields,
+  SnapshotKid,
+  SnapshotPlayer,
+  SnapshotTikbalang,
+} from "@sundo/server/messages";
 
 /** The host sends a snapshot every tick: 20 ticks/s = 20 snapshots/s (NET-02; was 2 → 10/s). */
 export const TICKS_PER_SNAPSHOT = 1;
@@ -110,6 +115,18 @@ export class SnapshotBuffer {
   sampleKids(nowMs: number): SnapshotKid[] {
     const at = this.locate(nowMs);
     return at ? blend(at.a.kids ?? [], at.b.kids ?? [], at.t) : [];
+  }
+
+  /**
+   * Where the tikbalang should be drawn at `nowMs` (S3-02), slid between snapshots like the
+   * players. Undefined outside the round (no tikbalang in the snapshots).
+   */
+  sampleTikbalang(nowMs: number): SnapshotTikbalang | undefined {
+    const at = this.locate(nowMs);
+    const to = at?.b.tikbalang;
+    if (!at || !to) return undefined;
+    const from = at.a.tikbalang ?? to;
+    return { ...to, x: from.x + (to.x - from.x) * at.t, y: from.y + (to.y - from.y) * at.t };
   }
 
   /**

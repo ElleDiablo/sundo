@@ -156,6 +156,12 @@ export class Predictor {
       kidSpots: [],
       kids: host.kids ?? [],
       safeZones: [], // no recharging in the prediction: the battery comes from each snapshot
+      // No tikbalang: being caught isn't predicted (the host decides; S3-03's jump to the grove
+      // arrives in a snapshot and the prediction snaps to it).
+      tikbalang: null,
+      tikSpawn: null,
+      patrol: [],
+      ambush: [],
       // No houses: taking a child home isn't predicted. The host decides it, and the next
       // snapshot (without that child) removes them from my line about one round trip later.
       homes: [],

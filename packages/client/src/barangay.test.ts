@@ -11,6 +11,8 @@ import { describe, expect, it } from "vitest";
 import {
   findTiledPoint,
   findTiledPoints,
+  findTiledRects,
+  tileInZone,
   isWall,
   KID_COUNT,
   mapFromTiled,
@@ -81,5 +83,32 @@ describe("the barangay map's houses (S2-04)", () => {
 
   it("has a wall above each doorway (the house itself), so it really is a door", () => {
     for (const { tileX, tileY } of homes) expect(isWall(map, tileX, tileY - 1)).toBe(true);
+  });
+});
+
+describe("the barangay map's tikbalang points and safe zones (S3-01, S3-02)", () => {
+  const zones = findTiledRects(tiled, "zones", "safe");
+  const points = ["tikbalang", "patrol", "ambush"].flatMap((name) =>
+    findTiledPoints(tiled, "spawns", name).map((p) => ({ name, ...p })),
+  );
+
+  it("has two safe zones, one around the plaza spawn", () => {
+    expect(zones).toHaveLength(2);
+    expect(tileInZone(zones, spawn.tileX, spawn.tileY)).toBe(true);
+  });
+
+  it("has one spawn, patrol points and ambush points for the tikbalang", () => {
+    expect(points.filter((p) => p.name === "tikbalang")).toHaveLength(1);
+    expect(points.filter((p) => p.name === "patrol").length).toBeGreaterThanOrEqual(4);
+    expect(points.filter((p) => p.name === "ambush").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("puts every tikbalang point on reachable open ground outside the safe zones", () => {
+    const open = reachable();
+    for (const { name, tileX, tileY } of points) {
+      const at = `${name} (${tileX}, ${tileY})`;
+      expect(open.has(`${tileX},${tileY}`), `${at} can't be reached`).toBe(true);
+      expect(tileInZone(zones, tileX, tileY), `${at} is in a safe zone`).toBe(false);
+    }
   });
 });
