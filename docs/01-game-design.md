@@ -72,7 +72,7 @@ clue about where the tikbalang is. The tikbalang doesn't hurt them.
 | Action | Key | Detail |
 |---|---|---|
 | Move | WASD / arrows | 4 tiles/s; 2.5 tiles/s while escorting |
-| Flashlight | Space | Cone of light; battery lasts 90 s total, recharges in safe zones |
+| Flashlight | Space / left mouse | Cone of light, aimed with the mouse (or the way you walk); battery lasts 90 s total, recharges in safe zones |
 | Call a child | E | A nearby lost child starts following you |
 | **Baliktad** | Q | Turn your shirt inside out: the tikbalang can't see you for 5 s. 30 s cooldown |
 | Emote | 1–4 | "Dito!" (here), "Takbo!" (run), "Tulong!" (help), "Salamat!" (thanks) |

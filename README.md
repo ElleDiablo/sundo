@@ -19,7 +19,8 @@ sends keys and draws the host's snapshots 20 times a second.*
 **Try it:** open the live link, press **Create room**, and share the 4-letter code. Friends open
 the same link, press **Join with code** and type it. Walk with WASD or the arrow keys, pick a hat
 and a shirt in the kapilya plaza, and the host presses **Start round**. Find the lost children and
-hold **Space** for your flashlight (it recharges in the plaza and at the store) and
+hold **Space** (or the left mouse button) for your flashlight, aimed with the mouse (it recharges in
+the plaza and at the store). Lost children cry, so listen for them, and
 press **E** next to one so they follow you (up to two at a time). Watch out for the tikbalang: in the
 dark you may only see its eye. If it catches you, you're *naligaw*: lost in the bamboo grove,
 and your children run off to hide. Press **Q** for *baliktad* (your shirt inside out): the
