@@ -57,7 +57,9 @@ setupLobby(
             console.info(
               `round trip (keys → host → snapshot), last 50: ` +
                 `median ${Math.round(stats.percentile(0.5) ?? 0)} ms, ` +
-                `p95 ${Math.round(stats.percentile(0.95) ?? 0)} ms`,
+                `p95 ${Math.round(stats.percentile(0.95) ?? 0)} ms; ` +
+                // NET-02: how often others were held still because a snapshot was late.
+                `frames held ${Math.round((world.snapshotHeldRatio() ?? 0) * 100)} %`,
             );
           }
         },

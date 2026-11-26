@@ -14,7 +14,7 @@ that teaches the monster. Humans, classic AI bots and LLM players share the same
 ![Two browsers in the same room: the host on the left, a guest on the right](docs/media/sprint1-two-browsers.gif)
 
 *Two browsers in one room through the AWS relay: the host (left) runs the game, the guest (right)
-sends keys and draws the host's snapshots 10 times a second.*
+sends keys and draws the host's snapshots 20 times a second.*
 
 **Try it:** open the live link, press **Create room**, and share the 4-letter code. Friends open
 the same link, press **Join with code** and type it. Walk with WASD or the arrow keys.

@@ -81,8 +81,9 @@ export class RealtimeStack extends Stack {
       stageName: props.envName,
       autoDeploy: true,
       // Caps how many messages per second the whole API accepts, so a runaway client
-      // can't run up a bill. A full 4-player room sends about 40 messages/s: 10 snapshots from the
-      // host plus up to 10 inputs from each of 3 guests (less in practice: only when keys change).
+      // can't run up a bill. A full 4-player room sends about 50 messages/s: 20 snapshots from the
+      // host (NET-02) plus up to 10 inputs from each of 3 guests (less in practice: only when keys
+      // change). One busy room fits; about two at once would hit the cap (raise it if that happens).
       throttle: { rateLimit: 100, burstLimit: 200 },
     });
     // Let the relay send replies to connected browsers (postToConnection), on this API only.

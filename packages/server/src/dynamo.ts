@@ -41,7 +41,7 @@ export class DynamoRoomStore implements RoomStore {
     // A Query reads one partition (one PK), optionally narrowed by the start of the sort key.
     // That's why seats are "SEAT#0"…"SEAT#3": begins_with(SK, "SEAT#") finds them all in one call.
     // Eventually consistent (the default) costs half a strongly consistent read; a guest who joined
-    // a fraction of a second ago may miss one snapshot, and the next one 100 ms later reaches them.
+    // a fraction of a second ago may miss one snapshot, and the next one 50 ms later reaches them.
     // A room has at most 4 seats, far below the 1 MB page size, so there's no paging to handle.
     const res = await this.db.send(
       new QueryCommand({
