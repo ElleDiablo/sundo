@@ -28,6 +28,8 @@ export interface InputFields {
   readonly shirt?: number;
   /** E held: call the nearest lost child (S2-03). Optional: older clients don't send it. */
   readonly call?: boolean;
+  /** 1–4 pressed: which emote to show (S2-06). Only there while the key is (just) pressed. */
+  readonly emote?: number;
 }
 
 /** One player in a snapshot: position in engine units (1 tile = 1000), and looks (S2-01). */
@@ -37,6 +39,8 @@ export interface SnapshotPlayer {
   readonly y: number;
   readonly hat?: number;
   readonly shirt?: number;
+  /** The emote showing over them (S2-06); missing when none is. */
+  readonly emote?: number;
 }
 
 /** One lost child in a snapshot (S2-02): where they are, in engine units. */
@@ -195,11 +199,15 @@ const isCoord = (n: unknown): n is number =>
 const isLook = (n: unknown): n is number => isCount(n) && n < 16;
 
 /**
- * Copies the optional `hat` and `shirt` fields onto `into` if they're valid. Returns false if one
- * is present but invalid (the whole message is then refused, like any other bad field).
+ * Copies the optional `hat`, `shirt` and `emote` (S2-06) fields onto `into` if they're valid.
+ * Returns false if one is present but invalid (the whole message is then refused, like any other
+ * bad field). All three are small whole numbers; the engine checks the exact range.
  */
-function copyLook(from: Record<string, unknown>, into: { hat?: number; shirt?: number }): boolean {
-  for (const key of ["hat", "shirt"] as const) {
+function copyLook(
+  from: Record<string, unknown>,
+  into: { hat?: number; shirt?: number; emote?: number },
+): boolean {
+  for (const key of ["hat", "shirt", "emote"] as const) {
     const value = from[key];
     if (value === undefined) continue;
     if (!isLook(value)) return false;

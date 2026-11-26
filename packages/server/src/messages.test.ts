@@ -143,6 +143,7 @@ describe("input and snapshot messages", () => {
       { ...snapshot, home: ["a-very-long-id"] },
       { ...snapshot, home: Array.from({ length: 9 }, (_, i) => `k${i}`) },
       { ...snapshot, phase: "draw" },
+      { ...snapshot, players: [{ id: "p0", x: 0, y: 0, emote: "hi" }] },
       { ...snapshot, dawn: -1 },
       { ...snapshot, dawn: 1.5 },
       { ...snapshot, timesLost: "none" },
@@ -192,5 +193,13 @@ describe("input and snapshot messages", () => {
       const ended = { ...snapshot, phase, kids: [], home: ["k0"], dawn: 1234, timesLost: 2 };
       expect(readSnapshotBody(JSON.stringify(ended))).toEqual(ended);
     }
+  });
+
+  it("passes on emotes in inputs and snapshots (S2-06), refusing bad ones", () => {
+    const input = { seq: 10, up: false, down: false, left: false, right: false, emote: 3 };
+    expect(readInputBody(JSON.stringify(input))).toEqual(input);
+    expect(readInputBody(JSON.stringify({ ...input, emote: -1 }))).toBeUndefined();
+    const talking = { ...snapshot, players: [{ id: "p0", x: 1, y: 2, emote: 0 }] };
+    expect(readSnapshotBody(JSON.stringify(talking))).toEqual(talking);
   });
 });
