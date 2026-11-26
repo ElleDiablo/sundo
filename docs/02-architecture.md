@@ -143,11 +143,10 @@ sequenceDiagram
 | Route | From → To | Body | Rate |
 |---|---|---|---|
 | `$connect` / `$disconnect` | any → server | (none). On `$disconnect` the relay frees the seat and deletes the connection's items; a guest leaving sends `player_left { seat }` to the host, the host leaving sends `host_left` to every guest (the room has ended) | once |
-| `create_room` | host → server → host | `{}` now (`{ name, hat, shirt }` from S2-01); reply `{ type: "room_created", code }` | once |
+| `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
-| `join` | player → server → host | `{ room, name, hat, shirt }` | once |
-| `input` | guest → server → host | `{ seq, up, down, left, right }` now (`light, call, baliktad, emote` later); the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[], ackTicks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt? }` now (`light, call, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown? }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -163,6 +162,14 @@ browsers, 40 trials each), other players now appear **~45 ms sooner** (median 10
 and players are held still for a moment went from ~22 % to ~29 %. A 100 ms buffer at 20/s halves
 those holds but gives back most of the gain, so the buffer is one constant
 (`INTERPOLATION_DELAY_MS`) to tune after playtests.
+
+**Lobby and round (S2-01):** every game starts in the `lobby` phase in the kapilya plaza. Players
+pick a hat and a shirt colour; the choice rides along in their next `input` (no extra message
+type), and the host's engine applies it, but only in the lobby. The host's **Start round** calls
+`startRound()`; a full room (4 seats) starts itself after a 10 s countdown that `step()` runs, so
+it's deterministic and stops if someone leaves. Snapshots carry `phase` (and `countdown` while it
+runs), so guests close the picker and see the brownout at the same moment. All the new fields are
+optional, so an older host, guest or relay still works (without looks).
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that

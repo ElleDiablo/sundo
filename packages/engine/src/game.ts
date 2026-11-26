@@ -46,6 +46,18 @@ export const PLAYER_DIAGONAL_SPEED = Math.floor(PLAYER_SPEED / Math.SQRT2); // =
 // Smaller than a tile, so walking through a 1-tile doorway doesn't need pixel-perfect aim.
 export const PLAYER_HALF_SIZE = 300;
 
+// How many hats and shirt colours there are to pick from in the lobby (S2-01). The engine only
+// checks that a choice is in range; the client decides what each number looks like
+// (packages/client/src/looks.ts): hat 0 = salakot, 1 = cap, 2 = bandana, 3 = none.
+export const HAT_COUNT = 4;
+export const SHIRT_COUNT = 6;
+
+// A full room (the relay's MAX_PLAYERS). When this many players are in the lobby, the round
+// starts on its own after a countdown, so a full room never waits on the host (GDD §8).
+export const FULL_ROOM = 4;
+// The countdown: 10 s = 200 ticks of 50 ms.
+export const START_COUNTDOWN_TICKS = 200;
+
 // ─── Types ───────────────────────────────────────────────────────────────────────────────────
 // `interface` describes the shape of an object. Types exist only while compiling: they are
 // checked by TypeScript and then erased, so they cost nothing at run time.
@@ -61,17 +73,35 @@ export interface MoveInput {
   readonly right: boolean; // D or → held?
 }
 
+// Everything a player can send for one tick: the movement keys, plus (in the lobby only) a new
+// hat or shirt choice. `?` = optional: a missing hat means "keep the one I have".
+export interface PlayerInput extends MoveInput {
+  readonly hat?: number; // 0 … HAT_COUNT - 1
+  readonly shirt?: number; // 0 … SHIRT_COUNT - 1
+}
+
 // One player's state. More fields arrive in later sprints (flashlight, escorting, baliktad).
 export interface PlayerState {
   readonly id: string; // unique id, assigned when the player joins a room (S1-04)
   readonly x: number; // centre of the box, left↔right, in units (always a whole number)
   readonly y: number; // centre of the box, top↕bottom, in units (always a whole number)
+  readonly hat: number; // which hat they wear (S2-01); only changes in the lobby
+  readonly shirt: number; // which shirt colour (S2-01); only changes in the lobby
 }
+
+// The two parts of a game (S2-01). "lobby": players gather in the kapilya plaza and pick their
+// looks. "round": the brownout has started; looks are fixed. (A string union: the type allows
+// exactly these two strings, so a typo like "lobbby" is a compile error.)
+export type Phase = "lobby" | "round";
 
 // Everything needed to continue the game from this exact moment.
 export interface GameState {
-  readonly tick: number; // how many steps have run since the round began; labels snapshots (S1-05)
+  readonly tick: number; // how many steps have run since the game began; labels snapshots (S1-05)
   readonly map: TileMap; // the level layout; never changes during a round
+  readonly phase: Phase; // lobby or round (S2-01)
+  // Ticks left before a full lobby starts the round on its own, or null when no countdown is
+  // running (fewer than FULL_ROOM players, or the round has started).
+  readonly countdown: number | null;
   // An array, not an object keyed by id, so players are always processed in the same order.
   // Order will matter once players affect each other (e.g. two grabbing the same kid).
   readonly players: readonly PlayerState[];
@@ -80,17 +110,16 @@ export interface GameState {
 // Inputs for one tick, keyed by player id: { "p1": { up: true, ... }, "p2": { ... } }.
 // Record<string, MoveInput> = an object whose keys are strings and whose values are MoveInputs.
 // A player missing from this object is treated as "no keys held" (e.g. their packet was late).
-export type Inputs = Readonly<Record<string, MoveInput>>;
+export type Inputs = Readonly<Record<string, PlayerInput>>;
 
 // Things that happened during a step that the client reacts to once: a sound, "Naligaw!",
-// a telemetry record. None exist yet, so the type is `never` (a type with no possible values):
-// the events array can only be empty until real event types are added here.
-export type GameEvent = never;
+// a telemetry record. More types join this union in later stories (kid_home, caught, …).
+export type GameEvent = { readonly type: "round_started" };
 
 // What step() returns: the next state plus whatever happened on the way there.
 export interface StepResult {
   readonly state: GameState; // the game after this tick
-  readonly events: readonly GameEvent[]; // what happened during this tick (empty for now)
+  readonly events: readonly GameEvent[]; // what happened during this tick (often nothing)
 }
 
 // Where a player starts, in whole tiles (easier to write than units).
@@ -98,6 +127,8 @@ export interface PlayerSpawn {
   readonly id: string; // which player
   readonly tileX: number; // starting tile column; the player is placed at the tile's centre
   readonly tileY: number; // starting tile row
+  readonly hat?: number; // starting hat (default 0)
+  readonly shirt?: number; // starting shirt (default 0; the client gives each seat its own)
 }
 
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
@@ -106,17 +137,26 @@ export interface PlayerSpawn {
 export function createGame(map: TileMap, spawns: readonly PlayerSpawn[]): GameState {
   // .map() builds a NEW array by turning each spawn into a PlayerState.
   // `({ id, tileX, tileY })` is destructuring: it pulls those three fields out of each spawn.
-  const players = spawns.map(({ id, tileX, tileY }) => {
+  const players = spawns.map(({ id, tileX, tileY, hat, shirt }) => {
     // A player spawned inside a wall could never move out, so refuse it loudly.
     if (isWall(map, tileX, tileY)) {
       // `throw` stops the function with an error; the backticks build a message with ${values}.
       throw new RangeError(`player ${id} would spawn inside a wall at (${tileX}, ${tileY})`);
     }
     // Tile → units: tile 3 starts at 3000, and + 500 (half a tile) puts the player at its centre.
-    return { id, x: tileX * UNITS_PER_TILE + 500, y: tileY * UNITS_PER_TILE + 500 };
+    const look = { hat: validHat(hat) ?? 0, shirt: validShirt(shirt) ?? 0 };
+    return { id, x: tileX * UNITS_PER_TILE + 500, y: tileY * UNITS_PER_TILE + 500, ...look };
   });
   // `{ tick: 0, map, players }` is shorthand for { tick: 0, map: map, players: players }.
-  return { tick: 0, map, players };
+  // Every game starts in the lobby, with no countdown running.
+  return { tick: 0, map, phase: "lobby", countdown: null, players };
+}
+
+// Ends the lobby and starts the round now (the host pressed Start). Returns a NEW state.
+// Calling it again once the round has started changes nothing.
+export function startRound(state: GameState): GameState {
+  if (state.phase === "round") return state;
+  return { ...state, phase: "round", countdown: null };
 }
 
 // Adds a player to a running game (someone joined the room). Returns a NEW state, like step().
@@ -145,7 +185,13 @@ export function addPlayer(state: GameState, spawn: PlayerSpawn): GameState {
     const tx = spawn.tileX + dx;
     const ty = spawn.tileY + dy;
     if (isWall(state.map, tx, ty) || taken.has(`${tx},${ty}`)) continue;
-    const player = { id: spawn.id, x: tx * UNITS_PER_TILE + 500, y: ty * UNITS_PER_TILE + 500 };
+    const player = {
+      id: spawn.id,
+      x: tx * UNITS_PER_TILE + 500,
+      y: ty * UNITS_PER_TILE + 500,
+      hat: validHat(spawn.hat) ?? 0,
+      shirt: validShirt(spawn.shirt) ?? 0,
+    };
     // `[...a, b]` is a new array: every old player, then the new one at the end.
     return { ...state, players: [...state.players, player] };
   }
@@ -165,16 +211,55 @@ export function removePlayer(state: GameState, id: string): GameState {
 // It never edits `state`: it builds a new state and returns it, so the old one stays valid.
 // That's what lets tests compare "before" and "after", and lets a round be replayed exactly.
 export function step(state: GameState, inputs: Inputs): StepResult {
+  const inLobby = state.phase === "lobby";
   // Build the new list of players, one at a time, in the same order as before.
   const players = state.players.map((player) => {
     // Look up this player's keys. This is `undefined` if no input arrived for them this tick.
     const input = inputs[player.id];
     // `a ? b : c` means "if a then b else c". No input → the same player, standing still.
-    return input ? movePlayer(state.map, player, input) : player;
+    if (!input) return player;
+    const moved = movePlayer(state.map, player, input);
+    // Hats and shirts can only change in the lobby. Out-of-range choices are ignored.
+    return inLobby ? changeLook(moved, input) : moved;
   });
+
+  // The lobby countdown: runs while the room is full, stops if anyone leaves, and starts the
+  // round when it reaches 0. `??` = "if the left side is null/undefined, use the right side".
+  const events: GameEvent[] = [];
+  let phase = state.phase;
+  let countdown: number | null = null;
+  if (inLobby && players.length >= FULL_ROOM) {
+    countdown = (state.countdown ?? START_COUNTDOWN_TICKS) - 1;
+    if (countdown <= 0) {
+      phase = "round";
+      countdown = null;
+      events.push({ type: "round_started" });
+    }
+  }
+
   // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
-  // No events yet, so the events list is empty.
-  return { state: { tick: state.tick + 1, map: state.map, players }, events: [] };
+  return { state: { tick: state.tick + 1, map: state.map, phase, countdown, players }, events };
+}
+
+// ─── Looks (private helpers) ─────────────────────────────────────────────────────────────────
+
+// A hat number if it's a whole number in range, otherwise undefined (so `?? 0` picks a default).
+// Inputs come from the network, so a bad value is ignored rather than trusted.
+function validHat(hat: number | undefined): number | undefined {
+  return Number.isInteger(hat) && hat! >= 0 && hat! < HAT_COUNT ? hat : undefined;
+}
+
+// Same for a shirt colour.
+function validShirt(shirt: number | undefined): number | undefined {
+  return Number.isInteger(shirt) && shirt! >= 0 && shirt! < SHIRT_COUNT ? shirt : undefined;
+}
+
+// Applies a hat / shirt choice from an input, if it has one and it's valid. Returns the same
+// object when nothing changes, so a player who isn't changing looks isn't copied every tick.
+function changeLook(player: PlayerState, input: PlayerInput): PlayerState {
+  const hat = validHat(input.hat) ?? player.hat;
+  const shirt = validShirt(input.shirt) ?? player.shirt;
+  return hat === player.hat && shirt === player.shirt ? player : { ...player, hat, shirt };
 }
 
 // ─── Movement and collision (private helpers: no `export`, so only this file can use them) ───

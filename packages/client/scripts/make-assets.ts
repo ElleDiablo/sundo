@@ -7,7 +7,8 @@
  * Writes into public/assets:
  *   tiles/barangay.png    the tileset: ground, path edges, decoration, and multi-tile objects
  *                          (bahay kubo, sari-sari store, kapilya, trees, bamboo, fence, lamp post, bench)
- *   sprites/tanod.png     my tanod (from my character sheet) as a 4-frame walk
+ *   sprites/tanod.png     my tanod (from my character sheet) as a 4-frame walk, one row per look:
+ *                          4 hats × 6 shirt colours (src/looks.ts), placeholder hats generated here
  *   sprites/glow.png      a soft warm glow, drawn additively over lit doorways and windows
  *   maps/barangay.tmj     a 48×32 Tiled map using the tileset
  *
@@ -21,6 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
+import { HATS, lookRow, SHIRTS, WALK_FRAMES } from "../src/looks.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "..", "public", "assets");
@@ -866,18 +868,91 @@ const tmj = {
   ],
 };
 
-// ─── Tanod: my sprite + a generated 4-frame walk ─────────────────────────────────────────────
+// ─── Tanod: my sprite + a generated 4-frame walk, in every hat and shirt ────────────────────
 interface SpriteData {
   palette: Record<string, string>;
   rows: string[];
 }
+type Grid = (RGB | null)[][];
 const tanodData = JSON.parse(
   readFileSync(join(here, "sprites", "tanod.json"), "utf8"),
 ) as SpriteData;
 const FW = 16,
   FH = 28; // frame size (sprite is 14 × 26, padded)
-function walkFrames(s: SpriteData): (RGB | null)[][][] {
-  const grid = s.rows.map((row) => [...row].map((ch) => (ch === "." ? null : C(s.palette[ch]!))));
+
+// Looks (S2-01). My sheet's tanod wears a salakot (rows 0–4) and a gold shirt (rows 9–16).
+// The top of the head starts on row 5: hair (q) either side of the face, with the salakot's brim
+// ends (p, i, j) still poking out at the sides.
+const HAT_ROWS = 5; // rows 0–4 are the salakot
+const BRIM_ENDS = new Set(["p", "i", "j"]); // brim pixels on row 5, removed when the hat changes
+const SHIRT_ROWS = [9, 16]; // first and last row of the shirt
+const SHIRT_KEYS = new Set(["a", "l", "x", "y", "z", "m", "e", "f", "i"]); // its gold shades
+
+// Placeholder hats, drawn over rows 0–5 of the 14-pixel-wide sprite. Letters are colours below;
+// "." leaves the pixel as it is (row 5) or empty (rows 0–4). Salakot (hat 0) is my original.
+const HAT_COLOURS: Record<string, string> = {
+  q: "#403333", // hair, the same as my sheet's
+  c: "#b8443a", // cap
+  d: "#7a2b25", // cap brim (darker)
+  b: "#3e5f9c", // bandana
+  k: "#283f6b", // bandana knot (darker)
+};
+const HAT_PIXELS: Record<string, string[]> = {
+  Cap: [
+    "..............",
+    "..............",
+    "....cccc......",
+    "...cccccc.....",
+    "..ccccccccddd.",
+    "..............",
+  ],
+  Bandana: [
+    "..............",
+    "..............",
+    "..............",
+    "...qqqqqq.....",
+    ".kbbbbbbbb....",
+    "k.............",
+  ],
+  "No hat": [
+    "..............",
+    "..............",
+    "..............",
+    "...qqqqqq.....",
+    "..qqqqqqqq....",
+    "..............",
+  ],
+};
+
+/** My tanod as a grid of colours, with the given hat (by name) and shirt colour. */
+function dressedGrid(s: SpriteData, hat: string, shirtHex: string): Grid {
+  const base = C(s.palette["a"]!); // the shirt's main gold: its brightness = "no change"
+  const target = C(shirtHex);
+  const lum = (c: RGB) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  const pixels = HAT_PIXELS[hat];
+  return s.rows.map((row, y) =>
+    [...row].map((ch, x): RGB | null => {
+      // Hat: replace the salakot rows, and remove its brim ends from the first head row.
+      if (pixels && y <= HAT_ROWS) {
+        const p = pixels[y]![x]!;
+        if (p !== ".") return C(HAT_COLOURS[p]!);
+        if (y < HAT_ROWS || BRIM_ENDS.has(ch)) return null;
+      }
+      if (ch === ".") return null;
+      const colour = C(s.palette[ch]!);
+      // Shirt: same light and shade as the gold, in the new colour. Gold itself stays exact.
+      if (shirtHex !== SHIRTS[0].hex && y >= SHIRT_ROWS[0]! && y <= SHIRT_ROWS[1]!) {
+        if (SHIRT_KEYS.has(ch)) {
+          const k = lum(colour) / lum(base);
+          return target.map((v) => Math.min(255, Math.round(v * k))) as unknown as RGB;
+        }
+      }
+      return colour;
+    }),
+  );
+}
+
+function walkFrames(grid: Grid): Grid[] {
   const h = grid.length,
     legTop = Math.round(h * 0.76);
   const bottom = grid[h - 1]!.map((c, x) => (c ? x : -1)).filter((x) => x >= 0);
@@ -893,13 +968,17 @@ function walkFrames(s: SpriteData): (RGB | null)[][][] {
   );
   return [grid, lift(-1), bob, lift(1)];
 }
-const frames = walkFrames(tanodData);
-const tanod = new Img(FW * 4, FH);
-frames.forEach((f, i) => {
-  const ox = i * FW + Math.floor((FW - f[0]!.length) / 2),
-    oy = FH - f.length;
-  f.forEach((row, y) => row.forEach((c, x) => c && tanod.set(ox + x, oy + y, c)));
-});
+const tanod = new Img(FW * WALK_FRAMES, FH * HATS.length * SHIRTS.length);
+HATS.forEach((hat, h) =>
+  SHIRTS.forEach((shirt, sh) => {
+    const top = lookRow(h, sh) * FH; // this look's row in the sheet
+    walkFrames(dressedGrid(tanodData, hat, shirt.hex)).forEach((f, i) => {
+      const ox = i * FW + Math.floor((FW - f[0]!.length) / 2),
+        oy = top + FH - f.length;
+      f.forEach((row, y) => row.forEach((c, x) => c && tanod.set(ox + x, oy + y, c)));
+    });
+  }),
+);
 
 // Warm glow for lit doorways and windows (drawn with additive blending)
 const glow = new Img(64, 64);
@@ -929,5 +1008,5 @@ writeFileSync(join(out, "sprites", "tanod.png"), tanod.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
 console.log(
-  `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod 4 frames, ${lights.length} lights, map ${W}×${H}`,
+  `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${lights.length} lights, map ${W}×${H}`,
 );

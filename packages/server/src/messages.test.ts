@@ -113,6 +113,8 @@ describe("input and snapshot messages", () => {
       '{"seq":1.5,"up":true,"down":false,"left":false,"right":false}',
       '{"seq":-1,"up":true,"down":false,"left":false,"right":false}',
       '{"seq":1,"up":"yes","down":false,"left":false,"right":false}',
+      '{"seq":1,"up":true,"down":false,"left":false,"right":false,"hat":-1}',
+      '{"seq":1,"up":true,"down":false,"left":false,"right":false,"shirt":2.5}',
       "[]",
     ]) {
       expect(readInputBody(body), body).toBeUndefined();
@@ -127,8 +129,25 @@ describe("input and snapshot messages", () => {
       { ...snapshot, acks: "none" },
       { ...snapshot, ackTicks: [1, -2] },
       { ...snapshot, ackTicks: "lots" },
+      { ...snapshot, phase: "party" },
+      { ...snapshot, countdown: -5 },
+      { ...snapshot, players: [{ id: "p0", x: 0, y: 0, hat: 99 }] },
+      { ...snapshot, players: [{ id: "p0", x: 0, y: 0, shirt: "red" }] },
     ]) {
       expect(readSnapshotBody(JSON.stringify(bad)), JSON.stringify(bad)).toBeUndefined();
     }
+  });
+
+  // S2-01: looks in inputs and snapshots, and the lobby phase. All optional.
+  it("passes on hat, shirt, phase and countdown when they're valid", () => {
+    const input = { seq: 8, up: false, down: false, left: false, right: false, hat: 2, shirt: 5 };
+    expect(readInputBody(JSON.stringify({ action: "input", ...input }))).toEqual(input);
+    const lobby = {
+      ...snapshot,
+      players: [{ id: "p0", x: 1, y: 2, hat: 1, shirt: 3 }],
+      phase: "lobby",
+      countdown: 120,
+    };
+    expect(readSnapshotBody(JSON.stringify(lobby))).toEqual(lobby);
   });
 });

@@ -9,6 +9,9 @@
  * happened to go out just before a key press doesn't hold the press back (with prediction, that
  * wait would show as my own player starting late).
  *
+ * The same messages carry the hat and shirt I picked in the lobby (S2-01): picking one counts as a
+ * change, so it goes out at once, and the host's engine applies it.
+ *
  * A keepalive repeats the current keys once a second even when nothing changed. If one message
  * was ever lost (a throttled or failed Lambda), the host would otherwise keep a guest walking
  * forever; with the keepalive the mistake lasts at most a second.
@@ -18,7 +21,7 @@
  * it already has. The host also reports back the last seq it applied (snapshot `acks`), which is
  * how `acked()` measures the round trip: my key press → relay → host's engine → snapshot → relay → me.
  */
-import type { MoveInput } from "@sundo/engine";
+import type { PlayerInput } from "@sundo/engine";
 import type { InputFields } from "@sundo/server/messages";
 import type { TickInput } from "./prediction.ts";
 
@@ -27,13 +30,19 @@ export const INPUT_MIN_GAP_MS = 100;
 /** Repeat unchanged keys once a second, in case a message was lost. */
 export const INPUT_KEEPALIVE_MS = 1000;
 
-const sameKeys = (a: MoveInput, b: MoveInput) =>
-  a.up === b.up && a.down === b.down && a.left === b.left && a.right === b.right;
+/** Same keys AND same look (hat, shirt): anything different is a change worth sending. */
+const sameKeys = (a: PlayerInput, b: PlayerInput) =>
+  a.up === b.up &&
+  a.down === b.down &&
+  a.left === b.left &&
+  a.right === b.right &&
+  a.hat === b.hat &&
+  a.shirt === b.shirt;
 
 export class InputSender {
   private seq = 0;
   /** The keys in the last message sent (undefined before the first). */
-  private lastKeys: MoveInput | undefined;
+  private lastKeys: PlayerInput | undefined;
   private lastSentAt = -Infinity;
   /** When the keys last changed in a message sent (keepalives don't count): for the 100 ms gap. */
   private lastChangeAt = -Infinity;
@@ -53,7 +62,7 @@ export class InputSender {
    * undefined if nothing needs sending yet. A change that comes too soon after the last change
    * isn't lost: the keys still differ from `lastKeys`, so it goes out as soon as the gap is over.
    */
-  update(keys: MoveInput, nowMs: number): InputFields | undefined {
+  update(keys: PlayerInput, nowMs: number): InputFields | undefined {
     const changed = !this.lastKeys || !sameKeys(keys, this.lastKeys);
     // A change waits 100 ms after the last change; unchanged keys repeat once a second.
     const waited = changed ? nowMs - this.lastChangeAt : nowMs - this.lastSentAt;
@@ -66,8 +75,18 @@ export class InputSender {
     this.sentAt.set(this.seq, nowMs);
     // If acks stop coming (host gone), don't let the map grow forever: forget the oldest.
     if (this.sentAt.size > 100) this.sentAt.delete(this.sentAt.keys().next().value!);
-    const { up, down, left, right } = keys;
-    return { seq: this.seq, up, down, left, right };
+    const { up, down, left, right, hat, shirt } = keys;
+    const message: { -readonly [K in keyof InputFields]: InputFields[K] } = {
+      seq: this.seq,
+      up,
+      down,
+      left,
+      right,
+    };
+    // Only include the look when there is one (no `hat: undefined` on the wire).
+    if (hat !== undefined) message.hat = hat;
+    if (shirt !== undefined) message.shirt = shirt;
+    return message;
   }
 
   /**

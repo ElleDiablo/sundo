@@ -29,12 +29,12 @@
  * doesn't depend on anyone else and can be computed alone. Other players are still drawn from
  * snapshot interpolation (interpolation.ts).
  */
-import { step, type GameState, type MoveInput, type TileMap } from "@sundo/engine";
+import { step, type GameState, type PlayerInput, type TileMap } from "@sundo/engine";
 
 /** The input in effect for one local tick: the keys AND the seq of the message that sent them. */
 export interface TickInput {
   readonly seq: number;
-  readonly keys: MoveInput;
+  readonly keys: PlayerInput;
 }
 
 /** What the host has done with my inputs, read from a snapshot. */
@@ -55,7 +55,7 @@ export const SNAP_UNITS = 2000;
 /** Keep at most this many unconfirmed ticks (10 s). If the host goes quiet, stop growing. */
 const MAX_HISTORY = 200;
 
-const NO_KEYS: MoveInput = { up: false, down: false, left: false, right: false };
+const NO_KEYS: PlayerInput = { up: false, down: false, left: false, right: false };
 
 export class Predictor {
   /** My predicted state (a game with only me in it). Undefined until the first snapshot. */
@@ -117,11 +117,15 @@ export class Predictor {
     this.history.splice(0, cut);
 
     // 2. Start from the host's position and replay the rest. Only `players` matters for
-    //    movement; tick 0 is fine because step() never reads the tick number.
+    //    movement; tick 0 is fine because step() never reads the tick number. Phase "round" and
+    //    a placeholder look: prediction is only about WHERE I am (looks are drawn from my own
+    //    pick or the host's snapshot), and in "round" step() ignores looks and runs no countdown.
     let state: GameState = {
       tick: 0,
       map: this.map,
-      players: [{ id: this.id, x: host.x, y: host.y }],
+      phase: "round",
+      countdown: null,
+      players: [{ id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0 }],
     };
     let previous = state;
     for (const { keys } of this.history) {
