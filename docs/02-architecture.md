@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost }` now (`tikbalang` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost }` now (`tikbalang` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -197,6 +197,12 @@ players can still walk. Snapshots carry `dawn` and `timesLost`, so guests comput
 with the same function. The host's "Back to the plaza" calls `returnToLobby()`, which re-places
 everyone at the spawn (same rule as joining) and keeps the random generator going, so the next
 round hides the children somewhere new.
+
+**Emotes (S2-06, ADR-0005):** keys 1–4 add `emote` (0–3) to the next `input`; a quick tap stays in
+the input for 150 ms so it can't fall between two ticks or two messages. The host's engine shows it
+for 2 s (40 ticks), at most one a second per player, in every phase, and snapshot players carry
+`emote` while it shows. So emotes need no new message type or route: they ride on the input and
+snapshot messages that already exist, and the engine's rate limit applies to everyone equally.
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that
