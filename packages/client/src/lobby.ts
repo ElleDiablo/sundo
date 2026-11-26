@@ -14,6 +14,8 @@ import { createRoom, joinRoom, loadConfig, type Room } from "./net.ts";
 
 /** Called once the player is in a room, as host (seat 0) or guest (seat 1–3). */
 export type OnRoom = (room: Room) => void;
+/** Called when the lobby closes ("Start walking"): the game may take the keyboard now. */
+export type OnEnter = () => void;
 
 /** Finds an element by id, or throws: a missing element is a bug in index.html. */
 function el<T extends HTMLElement>(id: string): T {
@@ -22,7 +24,7 @@ function el<T extends HTMLElement>(id: string): T {
   return found as T;
 }
 
-export function setupLobby(onRoom: OnRoom): void {
+export function setupLobby(onRoom: OnRoom, onEnter: OnEnter): void {
   const panel = el<HTMLElement>("lobby");
   const status = el<HTMLElement>("lobby-status");
   const codeBox = el<HTMLElement>("room-code");
@@ -125,6 +127,7 @@ export function setupLobby(onRoom: OnRoom): void {
     panel.hidden = true;
     badge.hidden = false;
     document.querySelector<HTMLElement>("#game canvas")?.focus();
+    onEnter();
   });
 }
 
