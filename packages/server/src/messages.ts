@@ -74,6 +74,11 @@ export interface SnapshotFields {
   readonly countdown?: number;
   /** The lost children (S2-02). Optional: missing before the round (and from older hosts). */
   readonly kids?: readonly SnapshotKid[];
+  /**
+   * The ids of the children who are home this round, in the order they got there (S2-04): the
+   * "2 / 5" counter, and how a guest notices a new one (to play the sound and name them).
+   */
+  readonly home?: readonly string[];
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -215,7 +220,7 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
 function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
-  const { tick, players, acks, ackTicks, phase, countdown, kids } = v;
+  const { tick, players, acks, ackTicks, phase, countdown, kids, home } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
   const isCounts = (a: unknown): a is number[] =>
@@ -228,6 +233,12 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (countdown !== undefined && !isCount(countdown)) return undefined;
   const checkedKids = kids === undefined ? undefined : readKids(kids);
   if (kids !== undefined && !checkedKids) return undefined;
+  // S2-04: a short list of short ids (the same limits as the kids themselves).
+  const isIds = (a: unknown): a is string[] =>
+    Array.isArray(a) &&
+    a.length <= MAX_KIDS &&
+    a.every((id) => typeof id === "string" && id.length <= 8);
+  if (home !== undefined && !isIds(home)) return undefined;
   const checked: SnapshotPlayer[] = [];
   for (const p of players as unknown[]) {
     if (!p || typeof p !== "object") return undefined;
@@ -250,6 +261,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (phase !== undefined) snapshot.phase = phase;
   if (countdown !== undefined) snapshot.countdown = countdown;
   if (checkedKids) snapshot.kids = checkedKids;
+  if (home !== undefined) snapshot.home = home;
   return snapshot;
 }
 
