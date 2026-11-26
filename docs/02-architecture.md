@@ -228,6 +228,12 @@ the round, when ready, the engine sets 100 ticks of baliktad and a 600-tick cool
 ignores a player in baliktad, and a stalk or chase on them ends at once. Snapshots carry `bal` and
 `cool` while they run (a faded, pale tanod for everyone; "Q 12s" in my HUD).
 
+**Hoofbeats and the warning ring (S3-05):** client only. From my distance to the tikbalang and its
+mode, `hoofbeats.ts` gives a hoofbeat interval (900 → 350 ms from 12 tiles to 1, 250 ms in a chase),
+a volume and a ring strength; silent while it waits or lies in ambush. Hoofbeats are two Web Audio
+thuds; the ring is a red arc around the screen centre pointing at it, drawn whether or not the
+sound is on (M toggles sound, remembered in localStorage).
+
 **Emotes (S2-06, ADR-0005):** keys 1–4 add `emote` (0–3) to the next `input`; a quick tap stays in
 the input for 150 ms so it can't fall between two ticks or two messages. The host's engine shows it
 for 2 s (40 ticks), at most one a second per player, in every phase, and snapshot players carry

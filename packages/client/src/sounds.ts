@@ -13,7 +13,26 @@
 /** One AudioContext for the whole page, made on the first sound (making one is not free). */
 let context: AudioContext | undefined;
 
+/**
+ * Sound on or off (S3-05: M). Remembered in the browser (localStorage) between visits. With sound
+ * off, nothing plays; the on-screen rings still warn about the tikbalang and barking dogs.
+ */
+let muted = typeof localStorage !== "undefined" && localStorage.getItem("sundo:muted") === "1";
+
+/** Is the sound off? */
+export function isMuted(): boolean {
+  return muted;
+}
+
+/** Switches the sound on or off, and remembers it. Returns the new state (true = off). */
+export function toggleMuted(): boolean {
+  muted = !muted;
+  localStorage.setItem("sundo:muted", muted ? "1" : "0");
+  return muted;
+}
+
 function audio(): AudioContext | undefined {
+  if (muted) return undefined; // sound off: every play… function returns early
   if (typeof AudioContext === "undefined") return undefined; // very old browser, or tests
   context ??= new AudioContext();
   return context;
@@ -73,4 +92,30 @@ export function playCaught(me: boolean): void {
   note(ctx, 220, 0, 0.5, volume); // A3
   note(ctx, 174.61, 0.2, 0.6, volume); // F3
   note(ctx, 116.54, 0.45, 1.2, volume); // B♭2
+}
+
+/**
+ * One hoofbeat (S3-05): two quick, low thuds ("clip-clop"), sine waves at 90 and 75 Hz that die
+ * away in a tenth of a second. `volume` 0–0.25 comes from hoofbeats.ts (louder = nearer).
+ */
+export function playHoof(volume: number): void {
+  const ctx = audio();
+  if (!ctx || volume <= 0.002) return;
+  void ctx.resume();
+  const thud = (freq: number, at: number) => {
+    const start = ctx.currentTime + at;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, start);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.6, start + 0.1); // a falling "thump"
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.12);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + 0.15);
+  };
+  thud(90, 0);
+  thud(75, 0.09);
 }
