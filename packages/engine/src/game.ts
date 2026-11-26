@@ -21,7 +21,7 @@
 // Bring in helpers from map.ts. `type TileMap` imports only the type (erased when the code runs).
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
 import { inZone, type Zone } from "./light.ts";
-import { createRng } from "./rng.ts";
+import { createRng, type Rng } from "./rng.ts";
 import { spawnTikbalang, updateTikbalang, type TikbalangState, type TikMode } from "./tikbalang.ts";
 
 // ─── Tuning constants ────────────────────────────────────────────────────────────────────────
@@ -194,6 +194,10 @@ export interface GameState {
   readonly tikSpawn: Spot | null;
   readonly patrol: readonly Spot[];
   readonly ambush: readonly Spot[];
+  // Where a caught player is dropped (S3-03): the map's "grove" points, deep in the bamboo. Fixed.
+  readonly grove: readonly Spot[];
+  // The last catch this round (S3-03), so every browser can say "Naligaw!" once: who and when.
+  readonly lastCaught: { readonly player: string; readonly tick: number } | null;
   // Each house's doorway, in the map's order: child "k<n>" lives at homes[n] (S2-04). Fixed.
   readonly homes: readonly Spot[];
   // The ids of the children who are home this round, in the order they got there (S2-04).
@@ -223,7 +227,7 @@ export type GameEvent =
   | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
   // The tikbalang started stalking or chasing a player (S3-02): for sounds, telemetry later.
   | { readonly type: "tikbalang"; readonly mode: TikMode; readonly player: string }
-  // The tikbalang caught a player (S3-02); S3-03 makes them naligaw.
+  // The tikbalang caught a player (S3-02): they're naligaw, dropped in the bamboo grove (S3-03).
   | { readonly type: "caught"; readonly player: string }
   // A player started an emote (S2-06): for telemetry later (which emotes help teams win?).
   | { readonly type: "emote"; readonly player: string; readonly emote: number }
@@ -257,6 +261,7 @@ export interface GameOptions {
   readonly tikSpawn?: Spot; // where the tikbalang appears (S3-02)
   readonly patrol?: readonly Spot[]; // the tikbalang's patrol points (S3-02)
   readonly ambush?: readonly Spot[]; // the tikbalang's ambush points (S3-02)
+  readonly grove?: readonly Spot[]; // where caught players are dropped (S3-03)
 }
 
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
@@ -313,6 +318,8 @@ export function createGame(
     tikSpawn: options.tikSpawn ?? null,
     patrol: options.patrol ?? [],
     ambush: options.ambush ?? [],
+    grove: options.grove ?? [],
+    lastCaught: null,
     dawn: 0,
     timesLost: 0,
     players,
@@ -384,6 +391,7 @@ export function returnToLobby(
     home: [],
     dawn: 0,
     timesLost: 0,
+    lastCaught: null, // S3-03
     tikbalang: null, // S3-02: gone until the next round
     players: [],
   };
@@ -494,8 +502,18 @@ export function step(state: GameState, inputs: Inputs): StepResult {
   // Its random choices use the game's generator and save where it got to, like placeKids.
   if (inRound && state.tikbalang) {
     const rng = createRng(state.rngState);
-    const { tikbalang } = updateTikbalang(state.tikbalang, players, kids, state, rng, events);
-    next = { ...next, tikbalang, rngState: rng.state };
+    const { tikbalang, caught } = updateTikbalang(
+      state.tikbalang,
+      players,
+      kids,
+      state,
+      rng,
+      events,
+    );
+    next = { ...next, tikbalang };
+    // Caught (S3-03): naligaw. Uses the same generator (for the drop spot) before saving it.
+    if (caught) next = naligaw(next, caught, rng);
+    next = { ...next, rngState: rng.state };
   }
 
   // The round: the dawn timer counts down, and the round ends (S2-05). Every child home wins,
@@ -545,6 +563,7 @@ function beginRound(state: GameState): GameState {
     home: [],
     dawn: ROUND_TICKS, // S2-05: 6 minutes to dawn
     timesLost: 0,
+    lastCaught: null, // S3-03
     rngState,
     // S3-02: the tikbalang appears at its spawn point (if the map has one), waiting out the grace.
     tikbalang: state.tikSpawn ? spawnTikbalang(state.tikSpawn) : null,
@@ -680,6 +699,51 @@ function bringKidsHome(
   return {
     kids: kids.filter((k) => !arrived.includes(k)),
     home: [...home, ...arrived.map((k) => k.id)],
+  };
+}
+
+// ─── Getting caught (private helper, S3-03) ──────────────────────────────────────────────────
+
+// The tikbalang caught `id`: they're naligaw (lost), never hurt (GDD §2, PG-13). They're dropped at
+// a random grove point (seeded), the team's times-lost count goes up (−25 in the score), and the
+// children following them scatter: each runs to the nearest hiding spot no other lost child is on,
+// and has to be found and called again.
+function naligaw(state: GameState, id: string, rng: Rng): GameState {
+  const drop = state.grove.length > 0 ? state.grove[rng.int(0, state.grove.length - 1)]! : null;
+  const players = state.players.map((p) =>
+    p.id === id && drop
+      ? { ...p, x: drop.tileX * UNITS_PER_TILE + 500, y: drop.tileY * UNITS_PER_TILE + 500 }
+      : p,
+  );
+  // Scatter, one child at a time in list order, so two never pick the same spot.
+  const taken = new Set(
+    state.kids.filter((k) => k.following === null).map((k) => `${tileOf(k.x)},${tileOf(k.y)}`),
+  );
+  const kids = state.kids.map((k) => {
+    if (k.following !== id) return k;
+    let best: Spot | undefined;
+    let bestD = Infinity;
+    for (const spot of state.kidSpots) {
+      if (taken.has(`${spot.tileX},${spot.tileY}`)) continue;
+      const d =
+        (spot.tileX * UNITS_PER_TILE + 500 - k.x) ** 2 +
+        (spot.tileY * UNITS_PER_TILE + 500 - k.y) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = spot;
+      }
+    }
+    if (!best) return { ...k, following: null }; // nowhere to run: lost right here
+    taken.add(`${best.tileX},${best.tileY}`);
+    const x = best.tileX * UNITS_PER_TILE + 500;
+    return { ...k, x, y: best.tileY * UNITS_PER_TILE + 500, following: null };
+  });
+  return {
+    ...state,
+    players,
+    kids,
+    timesLost: state.timesLost + 1,
+    lastCaught: { player: id, tick: state.tick },
   };
 }
 
