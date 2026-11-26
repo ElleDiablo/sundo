@@ -1,7 +1,8 @@
 /**
  * Tests on the real, generated map (public/assets/maps/barangay.tmj), not a hand-drawn test map:
- * the lost children's hiding spots (S2-02) must all be places a player can actually walk to.
- * A spot behind a wall or across the creek with no bridge would make a round impossible to win.
+ * the lost children's hiding spots (S2-02) and their houses' doorways (S2-04) must all be places a
+ * player can actually walk to. A spot behind a wall or across the creek with no bridge would make a
+ * round impossible to win.
  *
  * If this fails after editing the map (in Tiled or in scripts/make-assets.ts), move the spot.
  */
@@ -22,6 +23,7 @@ const tiled = JSON.parse(
 const map = mapFromTiled(tiled);
 const spawn = findTiledPoint(tiled, "spawns", "player");
 const spots = findTiledPoints(tiled, "spawns", "kid");
+const homes = findTiledPoints(tiled, "spawns", "home");
 
 /** Every tile reachable on foot from the plaza spawn (a breadth-first search over open tiles). */
 function reachable(): Set<string> {
@@ -60,5 +62,24 @@ describe("the barangay map's hiding spots (S2-02)", () => {
       expect(isWall(map, tileX, tileY), `(${tileX}, ${tileY}) is a wall`).toBe(false);
       expect(open.has(`${tileX},${tileY}`), `(${tileX}, ${tileY}) can't be reached`).toBe(true);
     }
+  });
+});
+
+describe("the barangay map's houses (S2-04)", () => {
+  it("has a doorway for every child, all different", () => {
+    expect(homes).toHaveLength(KID_COUNT);
+    expect(new Set(homes.map((h) => `${h.tileX},${h.tileY}`)).size).toBe(KID_COUNT);
+  });
+
+  it("puts every doorway on open ground that can be walked to from the plaza", () => {
+    const open = reachable();
+    for (const { tileX, tileY } of homes) {
+      expect(isWall(map, tileX, tileY), `(${tileX}, ${tileY}) is a wall`).toBe(false);
+      expect(open.has(`${tileX},${tileY}`), `(${tileX}, ${tileY}) can't be reached`).toBe(true);
+    }
+  });
+
+  it("has a wall above each doorway (the house itself), so it really is a door", () => {
+    for (const { tileX, tileY } of homes) expect(isWall(map, tileX, tileY - 1)).toBe(true);
   });
 });
