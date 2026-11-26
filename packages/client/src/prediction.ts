@@ -125,6 +125,9 @@ export class Predictor {
       map: this.map,
       phase: "round",
       countdown: null,
+      rngState: 0,
+      kidSpots: [],
+      kids: [],
       players: [{ id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0 }],
     };
     let previous = state;

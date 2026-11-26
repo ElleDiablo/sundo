@@ -1,6 +1,7 @@
 /**
  * Tests for the game rules: creating a game, adding players, and step() (speed, walls, sliding,
- * determinism), plus the lobby (S2-01): looks, the host's Start and the full-room countdown.
+ * determinism), plus the lobby (S2-01): looks, the host's Start and the full-room countdown, and
+ * the lost children (S2-02): 5 of the map's hiding spots, chosen with the seeded generator.
  * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import {
   createGame,
   FULL_ROOM,
   HAT_COUNT,
+  KID_COUNT,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
@@ -350,5 +352,62 @@ describe("lobby: starting the round (S2-01)", () => {
     expect(left.countdown).toBeNull();
     const back = step(addPlayer(left, { id: "p3", tileX: 8, tileY: 8 }), {}).state;
     expect(back.countdown).toBe(START_COUNTDOWN_TICKS - 1);
+  });
+});
+
+describe("lost children (S2-02)", () => {
+  // 12 hiding spots along row 2 and row 8 of the room.
+  const SPOTS = Array.from({ length: 12 }, (_, i) => ({
+    tileX: 1 + (i % 6),
+    tileY: i < 6 ? 2 : 8,
+  }));
+  const game = (seed: number) =>
+    createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }], { seed, kidSpots: SPOTS });
+  const tiles = (state: GameState) =>
+    state.kids.map((k) => `${(k.x - 500) / UNITS_PER_TILE},${(k.y - 500) / UNITS_PER_TILE}`);
+
+  it("has no children in the lobby", () => {
+    expect(game(7).kids).toEqual([]);
+  });
+
+  it("puts 5 children on 5 different hiding spots when the round starts", () => {
+    const kids = startRound(game(7)).kids;
+    expect(kids.map((k) => k.id)).toEqual(["k0", "k1", "k2", "k3", "k4"]);
+    expect(KID_COUNT).toBe(5);
+    const spots = tiles(startRound(game(7)));
+    expect(new Set(spots).size).toBe(5); // no two on the same spot
+    const allowed = new Set(SPOTS.map((s) => `${s.tileX},${s.tileY}`));
+    for (const spot of spots) expect(allowed.has(spot)).toBe(true);
+  });
+
+  it("chooses the same spots for the same seed, and different ones for another seed", () => {
+    expect(tiles(startRound(game(7)))).toEqual(tiles(startRound(game(7))));
+    const seeds = [1, 2, 3, 4, 5].map((seed) => tiles(startRound(game(seed))).join(" "));
+    expect(new Set(seeds).size).toBeGreaterThan(1);
+  });
+
+  it("uses every spot over many rounds (no spot is never chosen)", () => {
+    const used = new Set<string>();
+    for (let seed = 0; seed < 200; seed++)
+      tiles(startRound(game(seed))).forEach((t) => used.add(t));
+    expect(used.size).toBe(12);
+  });
+
+  it("also places them when the full-room countdown starts the round", () => {
+    const full = createGame(
+      ROOM,
+      [0, 1, 2, 3].map((i) => ({ id: `p${i}`, tileX: 2 + i * 2, tileY: 5 })),
+      { seed: 7, kidSpots: SPOTS },
+    );
+    expect(run(full, {}, START_COUNTDOWN_TICKS).kids).toHaveLength(KID_COUNT);
+    expect(tiles(run(full, {}, START_COUNTDOWN_TICKS))).toEqual(tiles(startRound(game(7))));
+  });
+
+  it("advances the random generator, so the next random choice is a new one", () => {
+    expect(startRound(game(7)).rngState).not.toBe(game(7).rngState);
+  });
+
+  it("refuses a hiding spot inside a wall", () => {
+    expect(() => createGame(ROOM, [], { kidSpots: [{ tileX: 0, tileY: 0 }] })).toThrow(/wall/);
   });
 });

@@ -20,6 +20,7 @@
 
 // Bring in helpers from map.ts. `type TileMap` imports only the type (erased when the code runs).
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
+import { createRng } from "./rng.ts";
 
 // ─── Tuning constants ────────────────────────────────────────────────────────────────────────
 // `export` lets other files (tests, the client) import these. `const` means they never change.
@@ -58,6 +59,9 @@ export const FULL_ROOM = 4;
 // The countdown: 10 s = 200 ticks of 50 ms.
 export const START_COUNTDOWN_TICKS = 200;
 
+// How many lost children each round has (S2-02, GDD: 5 of 12 possible spots).
+export const KID_COUNT = 5;
+
 // ─── Types ───────────────────────────────────────────────────────────────────────────────────
 // `interface` describes the shape of an object. Types exist only while compiling: they are
 // checked by TypeScript and then erased, so they cost nothing at run time.
@@ -89,6 +93,20 @@ export interface PlayerState {
   readonly shirt: number; // which shirt colour (S2-01); only changes in the lobby
 }
 
+// A lost child (S2-02). Only where they are, for now; following a player (S2-03) and their
+// home (S2-04) come next. Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
+export interface KidState {
+  readonly id: string;
+  readonly x: number; // centre, in units, like a player
+  readonly y: number;
+}
+
+// A tile, used for the map's hiding spots.
+export interface Spot {
+  readonly tileX: number;
+  readonly tileY: number;
+}
+
 // The two parts of a game (S2-01). "lobby": players gather in the kapilya plaza and pick their
 // looks. "round": the brownout has started; looks are fixed. (A string union: the type allows
 // exactly these two strings, so a typo like "lobbby" is a compile error.)
@@ -102,6 +120,13 @@ export interface GameState {
   // Ticks left before a full lobby starts the round on its own, or null when no countdown is
   // running (fewer than FULL_ROOM players, or the round has started).
   readonly countdown: number | null;
+  // The seeded random generator's state (ADR-0004: the engine's ONLY randomness). Every random
+  // choice reads it and stores the new state, so the same seed always gives the same round.
+  readonly rngState: number;
+  // Where children can hide (the map's "kid" points). Fixed for the whole game.
+  readonly kidSpots: readonly Spot[];
+  // The lost children: none in the lobby, KID_COUNT once the round starts (S2-02).
+  readonly kids: readonly KidState[];
   // An array, not an object keyed by id, so players are always processed in the same order.
   // Order will matter once players affect each other (e.g. two grabbing the same kid).
   readonly players: readonly PlayerState[];
@@ -131,10 +156,27 @@ export interface PlayerSpawn {
   readonly shirt?: number; // starting shirt (default 0; the client gives each seat its own)
 }
 
+// Extra settings for a new game. `?` = optional; createGame fills in a default.
+export interface GameOptions {
+  readonly seed?: number; // starts the random generator (the host picks one per game)
+  readonly kidSpots?: readonly Spot[]; // the map's hiding spots
+}
+
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
 
 // Builds the starting state of a round: tick 0, every player in the middle of their spawn tile.
-export function createGame(map: TileMap, spawns: readonly PlayerSpawn[]): GameState {
+export function createGame(
+  map: TileMap,
+  spawns: readonly PlayerSpawn[],
+  options: GameOptions = {},
+): GameState {
+  // A hiding spot inside a wall would put a child where nobody can reach: refuse it loudly.
+  const kidSpots = options.kidSpots ?? [];
+  for (const { tileX, tileY } of kidSpots) {
+    if (isWall(map, tileX, tileY)) {
+      throw new RangeError(`kid spot (${tileX}, ${tileY}) is inside a wall`);
+    }
+  }
   // .map() builds a NEW array by turning each spawn into a PlayerState.
   // `({ id, tileX, tileY })` is destructuring: it pulls those three fields out of each spawn.
   const players = spawns.map(({ id, tileX, tileY, hat, shirt }) => {
@@ -148,15 +190,17 @@ export function createGame(map: TileMap, spawns: readonly PlayerSpawn[]): GameSt
     return { id, x: tileX * UNITS_PER_TILE + 500, y: tileY * UNITS_PER_TILE + 500, ...look };
   });
   // `{ tick: 0, map, players }` is shorthand for { tick: 0, map: map, players: players }.
-  // Every game starts in the lobby, with no countdown running.
-  return { tick: 0, map, phase: "lobby", countdown: null, players };
+  // Every game starts in the lobby, with no countdown running and no children out yet.
+  // `>>> 0` turns the seed into a whole 32-bit number, the form the generator works with.
+  const rngState = (options.seed ?? 1) >>> 0;
+  return { tick: 0, map, phase: "lobby", countdown: null, rngState, kidSpots, kids: [], players };
 }
 
 // Ends the lobby and starts the round now (the host pressed Start). Returns a NEW state.
 // Calling it again once the round has started changes nothing.
 export function startRound(state: GameState): GameState {
   if (state.phase === "round") return state;
-  return { ...state, phase: "round", countdown: null };
+  return beginRound(state);
 }
 
 // Adds a player to a running game (someone joined the room). Returns a NEW state, like step().
@@ -223,22 +267,45 @@ export function step(state: GameState, inputs: Inputs): StepResult {
     return inLobby ? changeLook(moved, input) : moved;
   });
 
+  // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
+  const next: GameState = { ...state, tick: state.tick + 1, players };
+
   // The lobby countdown: runs while the room is full, stops if anyone leaves, and starts the
   // round when it reaches 0. `??` = "if the left side is null/undefined, use the right side".
-  const events: GameEvent[] = [];
-  let phase = state.phase;
-  let countdown: number | null = null;
   if (inLobby && players.length >= FULL_ROOM) {
-    countdown = (state.countdown ?? START_COUNTDOWN_TICKS) - 1;
-    if (countdown <= 0) {
-      phase = "round";
-      countdown = null;
-      events.push({ type: "round_started" });
-    }
+    const countdown = (state.countdown ?? START_COUNTDOWN_TICKS) - 1;
+    if (countdown <= 0) return { state: beginRound(next), events: [{ type: "round_started" }] };
+    return { state: { ...next, countdown }, events: [] };
   }
+  return { state: { ...next, countdown: null }, events: [] };
+}
 
-  // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
-  return { state: { tick: state.tick + 1, map: state.map, phase, countdown, players }, events };
+// ─── The round (private helpers) ─────────────────────────────────────────────────────────────
+
+// The lobby ends: switch phase and send the children out to hide. Used by startRound (the host's
+// button) and by the countdown, so both start a round exactly the same way.
+function beginRound(state: GameState): GameState {
+  const { kids, rngState } = placeKids(state);
+  return { ...state, phase: "round", countdown: null, kids, rngState };
+}
+
+// Picks KID_COUNT different hiding spots at random (seeded) and puts a child on each.
+// The method is a partial Fisher–Yates shuffle: for each child, pick one of the spots not used
+// yet and swap it out of the way, so no spot can be picked twice. With fewer spots than
+// children (a small test map), every spot gets one child.
+function placeKids(state: GameState): { kids: KidState[]; rngState: number } {
+  const rng = createRng(state.rngState);
+  const spots = [...state.kidSpots]; // a copy: shuffling must not change the state's list
+  const count = Math.min(KID_COUNT, spots.length);
+  const kids: KidState[] = [];
+  for (let i = 0; i < count; i++) {
+    const j = rng.int(i, spots.length - 1); // one of the spots from i onwards (not used yet)
+    [spots[i], spots[j]] = [spots[j]!, spots[i]!]; // swap it into place i
+    const { tileX, tileY } = spots[i]!;
+    kids.push({ id: `k${i}`, x: tileX * UNITS_PER_TILE + 500, y: tileY * UNITS_PER_TILE + 500 });
+  }
+  // Save where the generator got to, so the NEXT random choice continues from here.
+  return { kids, rngState: rng.state };
 }
 
 // ─── Looks (private helpers) ─────────────────────────────────────────────────────────────────

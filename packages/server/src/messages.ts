@@ -37,6 +37,16 @@ export interface SnapshotPlayer {
   readonly shirt?: number;
 }
 
+/** One lost child in a snapshot (S2-02): where they are, in engine units. */
+export interface SnapshotKid {
+  readonly id: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+/** The most children a snapshot may list (5 per round; a little room for later designs). */
+const MAX_KIDS = 8;
+
 /** The host's view of the game at one tick, sent to every guest 20 times a second. */
 export interface SnapshotFields {
   /** The engine tick this was taken at (20 per second), so guests can order and time snapshots. */
@@ -58,6 +68,8 @@ export interface SnapshotFields {
   readonly phase?: "lobby" | "round";
   /** Ticks left on the full-room countdown, while it runs (S2-01). */
   readonly countdown?: number;
+  /** The lost children (S2-02). Optional: missing before the round (and from older hosts). */
+  readonly kids?: readonly SnapshotKid[];
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -194,7 +206,7 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
 function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
-  const { tick, players, acks, ackTicks, phase, countdown } = v;
+  const { tick, players, acks, ackTicks, phase, countdown, kids } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
   const isCounts = (a: unknown): a is number[] =>
@@ -205,6 +217,8 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   // S2-01 fields, also optional: if present they must be valid.
   if (phase !== undefined && phase !== "lobby" && phase !== "round") return undefined;
   if (countdown !== undefined && !isCount(countdown)) return undefined;
+  const checkedKids = kids === undefined ? undefined : readKids(kids);
+  if (kids !== undefined && !checkedKids) return undefined;
   const checked: SnapshotPlayer[] = [];
   for (const p of players as unknown[]) {
     if (!p || typeof p !== "object") return undefined;
@@ -226,7 +240,21 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (ackTicks !== undefined) snapshot.ackTicks = ackTicks;
   if (phase !== undefined) snapshot.phase = phase;
   if (countdown !== undefined) snapshot.countdown = countdown;
+  if (checkedKids) snapshot.kids = checkedKids;
   return snapshot;
+}
+
+/** Checks a snapshot's `kids` list (S2-02); undefined if it isn't a short list of valid kids. */
+function readKids(kids: unknown): SnapshotKid[] | undefined {
+  if (!Array.isArray(kids) || kids.length > MAX_KIDS) return undefined;
+  const checked: SnapshotKid[] = [];
+  for (const k of kids as unknown[]) {
+    if (!k || typeof k !== "object") return undefined;
+    const { id, x, y } = k as Record<string, unknown>;
+    if (typeof id !== "string" || id.length > 8 || !isCoord(x) || !isCoord(y)) return undefined;
+    checked.push({ id, x, y }); // known fields only
+  }
+  return checked;
 }
 
 /** Parses a JSON message body into an object, or undefined if it isn't one. */

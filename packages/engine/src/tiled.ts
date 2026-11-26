@@ -111,13 +111,28 @@ export function findTiledPoint(
   layerName: string,
   objectName: string,
 ): { tileX: number; tileY: number } {
+  const [first] = findTiledPoints(tiled, layerName, objectName);
+  if (!first) throw new RangeError(`no object named "${objectName}" in layer "${layerName}"`);
+  return first;
+}
+
+/**
+ * Finds EVERY point object with this name in an object layer, as tile positions, in the order
+ * they appear in the file. Used for the children's hiding spots (S2-02): 12 points named "kid".
+ * Returns an empty list if there are none.
+ */
+export function findTiledPoints(
+  tiled: TiledMap,
+  layerName: string,
+  objectName: string,
+): { tileX: number; tileY: number }[] {
   const layer = tiled.layers.find((l) => l.type === "objectgroup" && l.name === layerName);
   if (!layer || layer.type !== "objectgroup")
     throw new RangeError(`no object layer named "${layerName}"`);
-  const obj = layer.objects.find((o) => o.name === objectName);
-  if (!obj) throw new RangeError(`no object named "${objectName}" in layer "${layerName}"`);
-  return {
-    tileX: Math.floor(obj.x / tiled.tilewidth),
-    tileY: Math.floor(obj.y / tiled.tileheight),
-  };
+  return layer.objects
+    .filter((o) => o.name === objectName)
+    .map((o) => ({
+      tileX: Math.floor(o.x / tiled.tilewidth),
+      tileY: Math.floor(o.y / tiled.tileheight),
+    }));
 }

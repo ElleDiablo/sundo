@@ -133,6 +133,9 @@ describe("input and snapshot messages", () => {
       { ...snapshot, countdown: -5 },
       { ...snapshot, players: [{ id: "p0", x: 0, y: 0, hat: 99 }] },
       { ...snapshot, players: [{ id: "p0", x: 0, y: 0, shirt: "red" }] },
+      { ...snapshot, kids: "five" },
+      { ...snapshot, kids: Array.from({ length: 9 }, (_, i) => ({ id: `k${i}`, x: 0, y: 0 })) },
+      { ...snapshot, kids: [{ id: "k0", x: "here", y: 0 }] },
     ]) {
       expect(readSnapshotBody(JSON.stringify(bad)), JSON.stringify(bad)).toBeUndefined();
     }
@@ -149,5 +152,13 @@ describe("input and snapshot messages", () => {
       countdown: 120,
     };
     expect(readSnapshotBody(JSON.stringify(lobby))).toEqual(lobby);
+  });
+
+  it("passes on the lost children (S2-02), dropping unknown fields", () => {
+    const round = { ...snapshot, phase: "round", kids: [{ id: "k0", x: 2500, y: 3500, x2: 1 }] };
+    expect(readSnapshotBody(JSON.stringify(round))).toEqual({
+      ...round,
+      kids: [{ id: "k0", x: 2500, y: 3500 }],
+    });
   });
 });

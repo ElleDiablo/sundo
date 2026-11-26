@@ -13,6 +13,7 @@ export { isWall, mapFromRows, tileOf, UNITS_PER_TILE, type TileMap } from "./map
 // Reading maps saved by the Tiled editor.
 export {
   findTiledPoint,
+  findTiledPoints,
   mapFromTiled,
   TILE_SIZE_PX,
   type TiledLayer,
@@ -26,6 +27,7 @@ export {
   createGame,
   FULL_ROOM,
   HAT_COUNT,
+  KID_COUNT,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
@@ -35,13 +37,16 @@ export {
   startRound,
   step,
   type GameEvent,
+  type GameOptions,
   type GameState,
   type Inputs,
+  type KidState,
   type MoveInput,
   type Phase,
   type PlayerInput,
   type PlayerSpawn,
   type PlayerState,
+  type Spot,
   type StepResult,
 } from "./game.ts";
 

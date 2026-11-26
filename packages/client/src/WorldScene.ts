@@ -21,6 +21,10 @@
  * The phase travels in snapshots, and `onLobby` tells the page (wardrobe.ts) when it changes.
  * Looks are drawn from one spritesheet with a row per hat + shirt (looks.ts).
  *
+ * Lost children (S2-02): when the round starts the engine puts 5 kids on 5 of the map's 12 "kid"
+ * points, chosen with the seeded generator (the host picks the seed). The host draws them from
+ * its engine; guests from snapshots (`kids`), slid between snapshots like players.
+ *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
@@ -33,12 +37,14 @@ import {
   removePlayer,
   startRound,
   findTiledPoint,
+  findTiledPoints,
   mapFromTiled,
   step,
   TICK_MS,
   TILE_SIZE_PX,
   UNITS_PER_TILE,
   type GameState,
+  type KidState,
   type Phase,
   type PlayerInput,
   type PlayerState,
@@ -49,6 +55,7 @@ import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
+import { kidRow } from "./kids.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { Predictor } from "./prediction.ts";
 
@@ -105,6 +112,8 @@ export class WorldScene extends Phaser.Scene {
   private localId = playerId(0);
   /** One sprite per player id. */
   private sprites = new Map<string, Phaser.GameObjects.Sprite>();
+  /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
+  private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
   /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
   private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
@@ -156,6 +165,8 @@ export class WorldScene extends Phaser.Scene {
     // hat + shirt combination (looks.ts), 24 rows.
     this.load.spritesheet("tanod", "assets/sprites/tanod.png", { frameWidth: 16, frameHeight: 28 });
     this.load.image("glow", "assets/sprites/glow.png");
+    // The lost children (S2-02): same frame size, one row per child (kids.ts), 4 walk frames.
+    this.load.spritesheet("kids", "assets/sprites/kids.png", { frameWidth: 16, frameHeight: 28 });
   }
 
   create(): void {
@@ -171,7 +182,15 @@ export class WorldScene extends Phaser.Scene {
     const tiled = this.cache.tilemap.get("barangay").data as TiledMap;
     this.spawn = findTiledPoint(tiled, "spawns", "player");
     this.map = mapFromTiled(tiled);
-    this.state = createGame(this.map, [{ id: this.localId, ...this.spawn, ...this.look }]);
+    // The seed for this game's random choices (where the kids hide). The engine may not use
+    // Math.random (ADR-0004), so the browser picks the seed and the engine does the rest. Only
+    // the host's game matters: a guest's engine stops when it joins a room.
+    const seed = crypto.getRandomValues(new Uint32Array(1))[0]!;
+    const kidSpots = findTiledPoints(tiled, "spawns", "kid");
+    this.state = createGame(this.map, [{ id: this.localId, ...this.spawn, ...this.look }], {
+      seed,
+      kidSpots,
+    });
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
 
@@ -395,6 +414,7 @@ export class WorldScene extends Phaser.Scene {
       };
     });
     this.draw(drawn, now);
+    this.drawKids(this.state.kids); // they don't move yet (S2-03), so no blending between ticks
   }
 
   /** Sends the current state to the guests, if I'm hosting a room that has any. */
@@ -412,6 +432,7 @@ export class WorldScene extends Phaser.Scene {
       acks,
       ackTicks,
       phase, // S2-01: lobby or round, so guests can show the picker or the brownout
+      kids: this.state.kids.map(({ id, x, y }) => ({ id, x, y })), // S2-02 (empty in the lobby)
     };
     // The countdown only while it runs (`exactOptionalPropertyTypes`: no `countdown: undefined`).
     this.sendSnapshot(countdown === null ? snapshot : { ...snapshot, countdown });
@@ -444,6 +465,7 @@ export class WorldScene extends Phaser.Scene {
         : this.look;
     const me = mine ? { id: this.localId, ...mine, hat: look.hat, shirt: look.shirt } : old;
     this.draw([...players.filter((p) => p.id !== this.localId), ...(me ? [me] : [])], now);
+    this.drawKids(guest.buffer.sampleKids(now));
   }
 
   /** The lobby closed ("Start walking"): from now on my keys move my tanod. */
@@ -524,6 +546,33 @@ export class WorldScene extends Phaser.Scene {
         sprite.anims.stop();
         sprite.setFrame(row * WALK_FRAMES); // standing, in their look (also after a look change)
       }
+    }
+  }
+
+  /**
+   * Draws the lost children (S2-02) at these positions (engine units), and nobody else: adds a
+   * sprite for each new child, removes ones no longer listed. Standing still for now; they walk
+   * once they can follow a player (S2-03).
+   */
+  private drawKids(kids: readonly Pick<KidState, "id" | "x" | "y">[]): void {
+    const ids = new Set(kids.map((k) => k.id));
+    for (const [id, sprite] of this.kidSprites) {
+      if (ids.has(id)) continue;
+      sprite.destroy();
+      this.kidSprites.delete(id);
+    }
+    for (const kid of kids) {
+      let sprite = this.kidSprites.get(kid.id);
+      if (!sprite) {
+        // Origin bottom-centre (feet), standing frame of their row.
+        sprite = this.add.sprite(0, 0, "kids", kidRow(kid.id) * WALK_FRAMES).setOrigin(0.5, 1);
+        this.kidSprites.set(kid.id, sprite);
+      }
+      const x = toPx(kid.x);
+      const y = toPx(kid.y) + 4;
+      sprite.setPosition(Math.round(x), Math.round(y));
+      // Sorted by height on screen together with the players (same depth band).
+      sprite.setDepth(DEPTH.player + y / 10_000);
     }
   }
 
