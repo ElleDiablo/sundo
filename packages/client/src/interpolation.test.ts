@@ -114,4 +114,14 @@ describe("SnapshotBuffer", () => {
     b.sample(140);
     expect(b.heldRatio).toBe(0.5); // 2 of 4 frames held
   });
+
+  it("slides the lost children too (S2-02), and has none before the round", () => {
+    const b = new SnapshotBuffer(100);
+    b.push(snap(0, 0), 0);
+    expect(b.sampleKids(50)).toEqual([]);
+    b.push({ ...snap(2, 0), kids: [{ id: "k0", x: 1000, y: 0 }] }, 100);
+    b.push({ ...snap(4, 0), kids: [{ id: "k0", x: 2000, y: 0 }] }, 200);
+    // 250 ms → tick 3: half-way from tick 2 to tick 4.
+    expect(b.sampleKids(250)).toEqual([{ id: "k0", x: 1500, y: 0 }]);
+  });
 });

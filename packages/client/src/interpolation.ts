@@ -24,7 +24,7 @@
  * snapshot doesn't shift it much.
  */
 import { TICK_MS } from "@sundo/engine";
-import type { SnapshotFields, SnapshotPlayer } from "@sundo/server/messages";
+import type { SnapshotFields, SnapshotKid, SnapshotPlayer } from "@sundo/server/messages";
 
 /** The host sends a snapshot every tick: 20 ticks/s = 20 snapshots/s (NET-02; was 2 → 10/s). */
 export const TICKS_PER_SNAPSHOT = 1;
@@ -93,39 +93,66 @@ export class SnapshotBuffer {
 
   /**
    * Where everyone should be drawn at `nowMs` (my clock), in engine units.
-   * Undefined before the first snapshot.
+   * Undefined before the first snapshot. Counts the frame for `heldRatio`.
    */
   sample(nowMs: number): SnapshotPlayer[] | undefined {
+    const at = this.locate(nowMs);
+    if (!at) return undefined;
+    this.samples += 1;
+    if (at.held) this.held += 1;
+    return blend(at.a.players, at.b.players, at.t);
+  }
+
+  /**
+   * Where the lost children should be drawn at `nowMs` (S2-02), slid between snapshots exactly
+   * like the players. Empty before the round (no kids in the snapshots yet).
+   */
+  sampleKids(nowMs: number): SnapshotKid[] {
+    const at = this.locate(nowMs);
+    return at ? blend(at.a.kids ?? [], at.b.kids ?? [], at.t) : [];
+  }
+
+  /**
+   * The two snapshots either side of the moment to draw, and how far (t, 0–1) between them.
+   * `held` = the next snapshot hasn't arrived, so both are the newest one (t = 0). Undefined
+   * before the first snapshot.
+   */
+  private locate(
+    nowMs: number,
+  ): { a: SnapshotFields; b: SnapshotFields; t: number; held: boolean } | undefined {
     const newest = this.latest;
     if (!newest || this.offset === undefined) return undefined;
     // The host's game time to draw, in ticks (fractional: 120.4 = 40 % of the way to tick 121).
     const renderTick = (nowMs - this.offset - this.delayMs) / TICK_MS;
-    this.samples += 1;
 
     // Find the pair of snapshots either side of renderTick.
     let before = this.snapshots[0]!;
-    if (renderTick <= before.tick) return [...before.players]; // older than anything held
+    if (renderTick <= before.tick) return { a: before, b: before, t: 0, held: false }; // older than anything held
     for (const after of this.snapshots) {
       if (after.tick >= renderTick) {
         const t = (renderTick - before.tick) / (after.tick - before.tick);
-        return blend(before, after, t);
+        return { a: before, b: after, t, held: false };
       }
       before = after;
     }
     // Newer than the newest snapshot (the next one is late): hold everyone where they last were
     // rather than guessing ahead. Guessing ("extrapolation") looks wrong when someone stops.
-    this.held += 1;
-    return [...newest.players];
+    return { a: newest, b: newest, t: 0, held: true };
   }
 }
 
 /**
- * Players part-way between two snapshots (t = 0 → `a`, t = 1 → `b`). The player list comes from
- * `b`; someone who wasn't in `a` yet (they just joined) is simply drawn where `b` has them.
+ * Things (players or kids) part-way between two snapshots (t = 0 → `a`, t = 1 → `b`). The list
+ * comes from `b`; anything that wasn't in `a` yet (a player who just joined) is drawn where `b`
+ * has it. `T extends …` makes this work for any list of things with an id and a position.
  */
-function blend(a: SnapshotFields, b: SnapshotFields, t: number): SnapshotPlayer[] {
-  return b.players.map((to) => {
-    const from = a.players.find((p) => p.id === to.id);
+function blend<T extends { readonly id: string; readonly x: number; readonly y: number }>(
+  a: readonly T[],
+  b: readonly T[],
+  t: number,
+): T[] {
+  return b.map((to) => {
+    const from = a.find((p) => p.id === to.id);
     if (!from) return to;
     // `...to` keeps the newer snapshot's other fields (hat, shirt); only the position is blended.
     return { ...to, x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
