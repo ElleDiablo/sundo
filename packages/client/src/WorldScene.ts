@@ -8,9 +8,9 @@
  *
  * Two modes (ADR-0001, host-authoritative):
  *   HOST (also playing alone): runs the engine at 20 ticks/s with my keys plus the latest keys
- *        each guest sent, and every 2nd tick (10/s) sends a snapshot of where everyone is.
+ *        each guest sent, and every tick (20/s, NET-02) sends a snapshot of where everyone is.
  *   GUEST: sends my keys to the host (InputSender) and draws the OTHER players from the host's
- *        snapshots ~100 ms in the past, sliding between them (SnapshotBuffer). My OWN player is
+ *        snapshots ~50 ms in the past, sliding between them (SnapshotBuffer). My OWN player is
  *        predicted (NET-01, Predictor): the guest runs the engine on just me, with the same keys
  *        the host gets, so I move the moment I press a key instead of a round trip later
  *        (~220–330 ms). Each snapshot corrects the prediction if the host disagrees.
@@ -40,7 +40,7 @@ import {
 import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/messages";
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
-import { SnapshotBuffer } from "./interpolation.ts";
+import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
 import { Predictor } from "./prediction.ts";
 
 /** Engine units → screen pixels (1 tile = 1000 units = 16 px). */
@@ -60,8 +60,6 @@ const NIGHT_TINT = 0x9ea8d9;
 
 const DEPTH = { ground: 0, decor: 1, objects: 2, player: 10, above: 20, night: 30, glow: 31 };
 
-/** The host sends a snapshot every 2nd tick: 20 ticks/s ÷ 2 = 10 snapshots/s. */
-const TICKS_PER_SNAPSHOT = 2;
 /** Keep the walk animation going this long after a player last moved, so it doesn't flicker. */
 const WALK_HOLD_MS = 120;
 
@@ -202,7 +200,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * I host a room: from now on send a snapshot to my guests 10 times a second (once there are any).
+   * I host a room: from now on send a snapshot to my guests 20 times a second (once there are any).
    */
   hostRoom(sendSnapshot: (snapshot: SnapshotFields) => void): void {
     this.sendSnapshot = sendSnapshot;
@@ -254,6 +252,14 @@ export class WorldScene extends Phaser.Scene {
     this.draw([], performance.now());
   }
 
+  /**
+   * Guest only: the share of frames (0–1) where the next snapshot was late, so other players were
+   * held still for a moment (NET-02 measures this to check a 50 ms buffer is enough).
+   */
+  snapshotHeldRatio(): number | undefined {
+    return this.guest?.buffer.heldRatio;
+  }
+
   /** A snapshot arrived from the host (I'm a guest). */
   receiveSnapshot(snapshot: SnapshotFields): void {
     const guest = this.guest;
@@ -288,7 +294,7 @@ export class WorldScene extends Phaser.Scene {
     this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
   }
 
-  /** Host (or alone): run the engine on everyone's keys; send a snapshot every 2nd tick. */
+  /** Host (or alone): run the engine on everyone's keys; send a snapshot every tick (TICKS_PER_SNAPSHOT). */
   private updateHost(delta: number, now: number): void {
     const { ticks, alpha } = advance(this.clock, delta);
     const inputs: Record<string, MoveInput> = { [this.localId]: this.readInput() };
@@ -336,7 +342,7 @@ export class WorldScene extends Phaser.Scene {
 
   /**
    * Guest: send my keys when they change; predict my own player at 20 ticks/s; draw everyone
-   * else from the host's snapshots ~100 ms in the past.
+   * else from the host's snapshots ~50 ms in the past.
    */
   private updateGuest(guest: NonNullable<WorldScene["guest"]>, delta: number, now: number): void {
     const message = guest.sender.update(this.readInput(), now);

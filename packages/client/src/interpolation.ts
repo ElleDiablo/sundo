@@ -1,18 +1,22 @@
 /**
- * Snapshot interpolation: how a guest draws smooth movement from 10 snapshots a second.
+ * Snapshot interpolation: how a guest draws smooth movement from 20 snapshots a second.
  *
- * The host sends where everyone is every 100 ms. Drawing each snapshot as it arrives would make
- * players jump 0.4 tiles at a time, and network jitter (one snapshot 30 ms late, the next 20 ms
- * early) would make the jumps uneven. Instead the guest draws the world slightly in the PAST,
- * ~100 ms behind the newest snapshot, so there are nearly always two snapshots on either side of
- * the moment being drawn, and it slides each player between them:
+ * The host sends where everyone is every tick (50 ms; NET-02, was every 2nd tick before). Drawing
+ * each snapshot as it arrives would make players jump 0.2 tiles at a time, and network jitter (one
+ * snapshot 30 ms late, the next 20 ms early) would make the jumps uneven. Instead the guest draws
+ * the world slightly in the PAST, one snapshot interval (50 ms) behind the newest snapshot, so
+ * there are usually two snapshots on either side of the moment being drawn, and it slides each
+ * player between them:
  *
- *   snapshots   ──●─────────●─────────●─────────●   (one per 100 ms, labelled by host tick)
- *                           ▲  drawn here: 30 % of the way from one to the next
- *                           └─ "render time" = now − 100 ms
+ *   snapshots   ──●────●────●────●────●   (one per 50 ms, labelled by host tick)
+ *                      ▲  drawn here: 30 % of the way from one to the next
+ *                      └─ "render time" = now − 50 ms
  *
- * The 100 ms of delay is the price of smoothness. It's the standard technique (used by Valve's
- * Source engine, among others), and is why the docs say guests see the world ~100 ms in the past.
+ * The delay is the price of smoothness. It's the standard technique (used by Valve's Source
+ * engine, among others), and is why the docs say guests see the world ~50 ms in the past.
+ * The trade-off (NET-02): a shorter buffer shows others sooner, but a snapshot that arrives more
+ * than 50 ms late leaves nothing to slide towards, so the player is held still for a moment.
+ * `heldRatio` counts how often that happens, so the trade-off is measured, not guessed.
  *
  * Timing uses the host's tick numbers, not arrival times: tick 120 is exactly 6 s into the host's
  * game (120 × 50 ms), however late it arrived. To turn "now" on my clock into a time on the host's
@@ -22,8 +26,15 @@
 import { TICK_MS } from "@sundo/engine";
 import type { SnapshotFields, SnapshotPlayer } from "@sundo/server/messages";
 
-/** How far in the past guests draw the world: one snapshot interval. */
-export const INTERPOLATION_DELAY_MS = 100;
+/** The host sends a snapshot every tick: 20 ticks/s = 20 snapshots/s (NET-02; was 2 → 10/s). */
+export const TICKS_PER_SNAPSHOT = 1;
+/** Time between two snapshots: 50 ms. */
+export const SNAPSHOT_INTERVAL_MS = TICKS_PER_SNAPSHOT * TICK_MS;
+/**
+ * How far in the past guests draw the world: one snapshot interval (50 ms). Tied to the snapshot
+ * rate, so changing TICKS_PER_SNAPSHOT changes both together.
+ */
+export const INTERPOLATION_DELAY_MS = SNAPSHOT_INTERVAL_MS;
 
 /** How quickly the clock-gap estimate follows new snapshots (0–1; small = steady). */
 const OFFSET_SMOOTHING = 0.1;
@@ -37,12 +48,24 @@ export class SnapshotBuffer {
   private readonly snapshots: SnapshotFields[] = [];
   /** My clock minus the host's game time (tick × 50 ms), in ms. Undefined until the first one. */
   private offset: number | undefined;
+  /** Frames drawn so far, and how many of them had no newer snapshot to slide towards (held). */
+  private samples = 0;
+  private held = 0;
 
   constructor(private readonly delayMs = INTERPOLATION_DELAY_MS) {}
 
   /** The newest snapshot received, if any. */
   get latest(): SnapshotFields | undefined {
     return this.snapshots.at(-1);
+  }
+
+  /**
+   * The share of frames (0–1) where the next snapshot hadn't arrived yet, so players were held
+   * still instead of sliding. 0 = the buffer always had a snapshot ahead; high = it's too short
+   * for this network's jitter. Undefined before anything was drawn.
+   */
+  get heldRatio(): number | undefined {
+    return this.samples === 0 ? undefined : this.held / this.samples;
   }
 
   /**
@@ -77,6 +100,7 @@ export class SnapshotBuffer {
     if (!newest || this.offset === undefined) return undefined;
     // The host's game time to draw, in ticks (fractional: 120.4 = 40 % of the way to tick 121).
     const renderTick = (nowMs - this.offset - this.delayMs) / TICK_MS;
+    this.samples += 1;
 
     // Find the pair of snapshots either side of renderTick.
     let before = this.snapshots[0]!;
@@ -90,6 +114,7 @@ export class SnapshotBuffer {
     }
     // Newer than the newest snapshot (the next one is late): hold everyone where they last were
     // rather than guessing ahead. Guessing ("extrapolation") looks wrong when someone stops.
+    this.held += 1;
     return [...newest.players];
   }
 }
