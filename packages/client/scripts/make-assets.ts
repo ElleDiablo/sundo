@@ -9,13 +9,15 @@
  *                          (bahay kubo, sari-sari store, kapilya, trees, bamboo, fence, lamp post, bench)
  *   sprites/tanod.png     my tanod (from my character sheet) as a 4-frame walk, one row per look:
  *                          4 hats × 6 shirt colours (src/looks.ts), placeholder hats generated here
+ *   sprites/kids.png      the 5 lost children (from my modern character sheet), 4-frame walk each
  *   sprites/glow.png      a soft warm glow, drawn additively over lit doorways and windows
  *   maps/barangay.tmj     a 48×32 Tiled map using the tileset
  *
  * Layers (drawn bottom to top; the player sits between objects and above):
  *   ground   grass, paths, water, dikes, plaza          decor    tufts, flowers, pebbles, leaves
  *   objects  walls, stilts, trunks, stalk bases, fences  above    roofs, canopies, bamboo tops
- *   lights   point objects where a warm glow is drawn     spawns   the "player" point
+ *   lights   point objects where a warm glow is drawn     spawns   the "player" point, and 12
+ *                                                                  "kid" hiding spots (S2-02)
  * A tile blocks movement if its tileset entry has `collides = true` (read by the engine).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -770,6 +772,23 @@ for (let y = 0; y < H; y++)
   });
 }
 
+// Hiding spots for the lost children (S2-02), as [tile x, tile y]. src/barangay.test.ts reads
+// the generated map and checks that each one is walkable and can be reached from the plaza.
+const KID_SPOTS: [number, number][] = [
+  [2, 2], // top-left corner
+  [12, 9], // field west of the plaza, behind the first kubo
+  [11, 15], // behind the kubo south of the road
+  [45, 2], // top-right corner
+  [41, 9], // field east of the store
+  [26, 15], // by the tree south of the plaza
+  [3, 24], // bamboo grove, west
+  [11, 26], // bamboo grove, middle
+  [6, 31], // bottom-left, south of the grove
+  [23, 29], // south field
+  [35, 24], // on a paddy dike
+  [47, 22], // east edge, past the paddies
+];
+
 const tmj = {
   type: "map",
   version: "1.10",
@@ -841,6 +860,20 @@ const tmj = {
           rotation: 0,
           visible: true,
         },
+        // S2-02: the 12 places a lost child can be hiding. Spread over the whole map, off the
+        // main paths: corners, behind houses, the bamboo grove, a paddy dike, the south field.
+        ...KID_SPOTS.map(([tx, ty], i) => ({
+          id: 100 + i,
+          name: "kid",
+          type: "",
+          point: true,
+          x: tx * 16 + 8,
+          y: ty * 16 + 8,
+          width: 0,
+          height: 0,
+          rotation: 0,
+          visible: true,
+        })),
       ],
     },
   ],
@@ -952,6 +985,11 @@ function dressedGrid(s: SpriteData, hat: string, shirtHex: string): Grid {
   );
 }
 
+/** A sprite from its letters and palette, as a grid of colours (no changes). */
+function plainGrid(s: SpriteData): Grid {
+  return s.rows.map((row) => [...row].map((ch) => (ch === "." ? null : C(s.palette[ch]!))));
+}
+
 function walkFrames(grid: Grid): Grid[] {
   const h = grid.length,
     legTop = Math.round(h * 0.76);
@@ -980,6 +1018,19 @@ HATS.forEach((hat, h) =>
   }),
 );
 
+// The lost children (S2-02): one row per child (k0…k4, same order as kids.json), 4 walk frames.
+const kidsData = JSON.parse(readFileSync(join(here, "sprites", "kids.json"), "utf8")) as {
+  kids: (SpriteData & { name: string })[];
+};
+const kidsSheet = new Img(FW * WALK_FRAMES, FH * kidsData.kids.length);
+kidsData.kids.forEach((kid, row) => {
+  walkFrames(plainGrid(kid)).forEach((f, i) => {
+    const ox = i * FW + Math.floor((FW - f[0]!.length) / 2),
+      oy = row * FH + FH - f.length; // feet on the bottom of the frame, like the tanod
+    f.forEach((r, y) => r.forEach((c, x) => c && kidsSheet.set(ox + x, oy + y, c)));
+  });
+});
+
 // Warm glow for lit doorways and windows (drawn with additive blending)
 const glow = new Img(64, 64);
 for (let y = 0; y < 64; y++)
@@ -1005,8 +1056,9 @@ if (
 for (const d of ["tiles", "sprites", "maps"]) mkdirSync(join(out, d), { recursive: true });
 writeFileSync(join(out, "tiles", "barangay.png"), sheet.png());
 writeFileSync(join(out, "sprites", "tanod.png"), tanod.png());
+writeFileSync(join(out, "sprites", "kids.png"), kidsSheet.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
 console.log(
-  `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${lights.length} lights, map ${W}×${H}`,
+  `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${kidsData.kids.length} kids, ${KID_SPOTS.length} kid spots, ${lights.length} lights, map ${W}×${H}`,
 );
