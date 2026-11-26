@@ -238,4 +238,13 @@ describe("input and snapshot messages", () => {
       expect(readSnapshotBody(JSON.stringify({ ...snapshot, caught: bad }))).toBeUndefined();
     }
   });
+
+  it("passes on baliktad in inputs and snapshots (S3-04)", () => {
+    const input = { seq: 12, up: false, down: false, left: false, right: false, baliktad: true };
+    expect(readInputBody(JSON.stringify(input))).toEqual(input);
+    const hidden = { ...snapshot, players: [{ id: "p0", x: 1, y: 2, bal: 80, cool: 580 }] };
+    expect(readSnapshotBody(JSON.stringify(hidden))).toEqual(hidden);
+    const bad = { ...snapshot, players: [{ id: "p0", x: 1, y: 2, bal: -1 }] };
+    expect(readSnapshotBody(JSON.stringify(bad))).toBeUndefined();
+  });
 });

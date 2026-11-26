@@ -32,6 +32,8 @@ export interface InputFields {
   readonly emote?: number;
   /** Space held: flashlight on (S3-01). Optional: older clients don't send it. */
   readonly light?: boolean;
+  /** Q pressed: baliktad (S3-04). Only there while the key is (just) pressed. */
+  readonly baliktad?: boolean;
 }
 
 /** One player in a snapshot: position in engine units (1 tile = 1000), and looks (S2-01). */
@@ -49,6 +51,10 @@ export interface SnapshotPlayer {
   readonly light?: boolean;
   /** Ticks of flashlight battery left (S3-01). */
   readonly battery?: number;
+  /** Ticks left in baliktad, invisible to the tikbalang (S3-04); missing when 0. */
+  readonly bal?: number;
+  /** Ticks until baliktad is ready again (S3-04); missing when ready. */
+  readonly cool?: number;
 }
 
 /** One lost child in a snapshot (S2-02): where they are, in engine units. */
@@ -250,8 +256,8 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
     right: right as boolean,
   };
   if (!copyLook(v, input)) return undefined;
-  // Optional true/false keys: E (S2-03) and Space (S3-01).
-  for (const key of ["call", "light"] as const) {
+  // Optional true/false keys: E (S2-03), Space (S3-01) and Q (S3-04).
+  for (const key of ["call", "light", "baliktad"] as const) {
     if (v[key] === undefined) continue;
     if (typeof v[key] !== "boolean") return undefined;
     input[key] = v[key];
@@ -328,6 +334,13 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     if (battery !== undefined) {
       if (!isCount(battery) || battery > 100_000) return undefined;
       player.battery = battery;
+    }
+    // S3-04: baliktad ticks left and cooldown ticks left.
+    for (const key of ["bal", "cool"] as const) {
+      const value = fields[key];
+      if (value === undefined) continue;
+      if (!isCount(value) || value > 100_000) return undefined;
+      player[key] = value;
     }
     checked.push(player);
   }
