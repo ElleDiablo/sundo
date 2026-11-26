@@ -175,6 +175,24 @@ export class WorldScene extends Phaser.Scene {
     const keyboard = this.input.keyboard;
     if (!keyboard) throw new Error("no keyboard input available");
     this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT") as Keys;
+
+    // 7. Typing in a text box (the room code) must not walk the tanod. Phaser "captures" these
+    //    keys for the whole page: it cancels the browser's normal handling, so W, A, S and D would
+    //    never reach the box either. While a text box has focus, switch the game's keyboard off
+    //    (no capture, no key tracking) and forget any keys it thought were held.
+    const isTextBox = (target: EventTarget | null) =>
+      target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+    document.addEventListener("focusin", (event) => {
+      if (!isTextBox(event.target)) return;
+      keyboard.enabled = false;
+      keyboard.disableGlobalCapture();
+      keyboard.resetKeys(); // a key held while clicking into the box would otherwise stick
+    });
+    document.addEventListener("focusout", (event) => {
+      if (!isTextBox(event.target)) return;
+      keyboard.enabled = true;
+      keyboard.enableGlobalCapture();
+    });
   }
 
   /**
