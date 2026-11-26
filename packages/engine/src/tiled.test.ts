@@ -1,10 +1,10 @@
 /**
  * Tests for reading Tiled maps into the engine: which tiles are walls (the `collides` property),
  * Tiled's flip flags and tileset gid offsets, clear errors for maps the engine can't read, and
- * finding spawn points.
+ * finding spawn points (one by name, or every point with a name, like the kids' hiding spots).
  */
 import { describe, expect, it } from "vitest";
-import { findTiledPoint, mapFromTiled, type TiledMap } from "./tiled.ts";
+import { findTiledPoint, findTiledPoints, mapFromTiled, type TiledMap } from "./tiled.ts";
 
 /** A 3 × 2 map. Tileset: id 0 = grass, id 1 = wall (collides), id 2 = roof (collides). */
 function sample(overrides: Partial<TiledMap> = {}): TiledMap {
@@ -88,5 +88,27 @@ describe("findTiledPoint", () => {
       /no object layer named "nope"/,
     );
     expect(() => findTiledPoint(sample(), "spawns", "child")).toThrow(/no object named "child"/);
+  });
+});
+
+describe("findTiledPoints", () => {
+  it("returns every point with the name, in file order, and [] when there are none", () => {
+    const layers = sample().layers.map((l) =>
+      l.type === "objectgroup"
+        ? {
+            ...l,
+            objects: [
+              ...l.objects,
+              { name: "kid", x: 4, y: 4, point: true },
+              { name: "kid", x: 20, y: 30, point: true },
+            ],
+          }
+        : l,
+    );
+    expect(findTiledPoints(sample({ layers }), "spawns", "kid")).toEqual([
+      { tileX: 0, tileY: 0 },
+      { tileX: 1, tileY: 1 },
+    ]);
+    expect(findTiledPoints(sample(), "spawns", "kid")).toEqual([]);
   });
 });
