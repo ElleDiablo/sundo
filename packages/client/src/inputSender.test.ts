@@ -50,7 +50,7 @@ describe("InputSender", () => {
   });
 
   it("puts every field of the keys in the message (none dropped on the way)", () => {
-    const keys = { ...up, hat: 1, shirt: 2, call: true, emote: 3 };
+    const keys = { ...up, hat: 1, shirt: 2, call: true, emote: 3, light: true };
     expect(new InputSender().update(keys, 0)).toEqual({ seq: 1, ...keys });
   });
 

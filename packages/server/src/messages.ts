@@ -30,6 +30,8 @@ export interface InputFields {
   readonly call?: boolean;
   /** 1–4 pressed: which emote to show (S2-06). Only there while the key is (just) pressed. */
   readonly emote?: number;
+  /** Space held: flashlight on (S3-01). Optional: older clients don't send it. */
+  readonly light?: boolean;
 }
 
 /** One player in a snapshot: position in engine units (1 tile = 1000), and looks (S2-01). */
@@ -41,6 +43,12 @@ export interface SnapshotPlayer {
   readonly shirt?: number;
   /** The emote showing over them (S2-06); missing when none is. */
   readonly emote?: number;
+  /** Which way they face (S3-01), packed into one number 0–8: (faceX + 1) × 3 + (faceY + 1). */
+  readonly face?: number;
+  /** Flashlight on (S3-01); missing when off. */
+  readonly light?: boolean;
+  /** Ticks of flashlight battery left (S3-01). */
+  readonly battery?: number;
 }
 
 /** One lost child in a snapshot (S2-02): where they are, in engine units. */
@@ -229,9 +237,11 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
     right: right as boolean,
   };
   if (!copyLook(v, input)) return undefined;
-  if (v["call"] !== undefined) {
-    if (typeof v["call"] !== "boolean") return undefined;
-    input.call = v["call"];
+  // Optional true/false keys: E (S2-03) and Space (S3-01).
+  for (const key of ["call", "light"] as const) {
+    if (v[key] === undefined) continue;
+    if (typeof v[key] !== "boolean") return undefined;
+    input[key] = v[key];
   }
   return input;
 }
@@ -269,6 +279,20 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     // Copy only the known fields: extra ones are dropped, not passed on.
     const player: { -readonly [K in keyof SnapshotPlayer]: SnapshotPlayer[K] } = { id, x, y };
     if (!copyLook(fields, player)) return undefined;
+    // S3-01: facing (0–8), flashlight on, battery ticks.
+    const { face, light, battery } = fields;
+    if (face !== undefined) {
+      if (!isCount(face) || face > 8) return undefined;
+      player.face = face;
+    }
+    if (light !== undefined) {
+      if (typeof light !== "boolean") return undefined;
+      player.light = light;
+    }
+    if (battery !== undefined) {
+      if (!isCount(battery) || battery > 100_000) return undefined;
+      player.battery = battery;
+    }
     checked.push(player);
   }
   // Build the result with only the optional fields that were sent (`exactOptionalPropertyTypes`
