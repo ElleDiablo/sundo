@@ -9,6 +9,8 @@
  *   guest  my keys → send(); snapshot → draw it; host_left → back to the menu (S1-06)
  * After "Start walking", the lobby plaza's picker opens (S2-01, wardrobe.ts): hat and shirt for
  * everyone, Start round for the host. It closes, with a "Brownout!" message, when the round starts.
+ * During the round a counter shows how many children are home ("Home 2 / 5", S2-04), and a chime
+ * plays for everyone when a child goes inside.
  * A guest also shows the measured round trip (keys → host → snapshot back) in the room badge, and
  * logs a summary to the console every 50 samples (the number recorded in the S1-05 PR).
  */
@@ -16,8 +18,9 @@ import Phaser from "phaser";
 import { LatencyStats } from "./inputSender.ts";
 import { backToMenu, setBadgeDetail, setupLobby, toast } from "./lobby.ts";
 import { onServerMessage, send } from "./net.ts";
+import { playKidHome } from "./sounds.ts";
 import { setupWardrobe } from "./wardrobe.ts";
-import { WorldScene } from "./WorldScene.ts";
+import { WorldScene, type RoundInfo } from "./WorldScene.ts";
 
 const game = new Phaser.Game({
   type: Phaser.AUTO, // WebGL where available
@@ -109,6 +112,17 @@ setupLobby(
     });
     // S2-03: a child started following me.
     world.events.on("escort", (name: string) => toast(`${name} is following you`));
+    // S2-04: the round's counter, and a chime for everyone when a child gets home.
+    const hud = document.getElementById("hud");
+    world.listenToRound(({ phase, home, total }) => {
+      if (!hud) return;
+      hud.hidden = phase === "lobby";
+      hud.textContent = `Home ${home} / ${total}`;
+    });
+    world.events.on("kid_home", (name: string, { home, total }: RoundInfo) => {
+      playKidHome();
+      toast(`${name} is home! ${home} / ${total}`);
+    });
     let shownPhase: string | undefined;
     world.listenToLobby((phase, seconds) => {
       wardrobe.show(phase, seconds);
