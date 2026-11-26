@@ -9,10 +9,11 @@
  * Two modes (ADR-0001, host-authoritative):
  *   HOST (also playing alone): runs the engine at 20 ticks/s with my keys plus the latest keys
  *        each guest sent, and every 2nd tick (10/s) sends a snapshot of where everyone is.
- *   GUEST: runs no engine. Sends my keys to the host (InputSender) and draws the host's snapshots
- *        ~100 ms in the past, sliding between them (SnapshotBuffer), so motion looks smooth.
- * A guest sees their own moves after a round trip through the relay (about 100–200 ms). Predicting
- * my own movement locally to hide that is a later story; it isn't needed to look smooth.
+ *   GUEST: sends my keys to the host (InputSender) and draws the OTHER players from the host's
+ *        snapshots ~100 ms in the past, sliding between them (SnapshotBuffer). My OWN player is
+ *        predicted (NET-01, Predictor): the guest runs the engine on just me, with the same keys
+ *        the host gets, so I move the moment I press a key instead of a round trip later
+ *        (~220–330 ms). Each snapshot corrects the prediction if the host disagrees.
  *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
@@ -33,11 +34,13 @@ import {
   type MoveInput,
   type PlayerState,
   type TiledMap,
+  type TileMap,
 } from "@sundo/engine";
 import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/messages";
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer } from "./interpolation.ts";
+import { Predictor } from "./prediction.ts";
 
 /** Engine units → screen pixels (1 tile = 1000 units = 16 px). */
 const toPx = (units: number) => (units / UNITS_PER_TILE) * TILE_SIZE_PX;
@@ -72,6 +75,7 @@ export class WorldScene extends Phaser.Scene {
   private clock!: FixedStep;
   private keys!: Keys;
   private spawn!: { tileX: number; tileY: number }; // the map's "player" spawn point
+  private map!: TileMap; // which tiles are walls (the engine's view of the map)
   /** Which player this browser controls. Starts as the host; a guest becomes their seat. */
   private localId = playerId(0);
   /** One sprite per player id. */
@@ -83,6 +87,11 @@ export class WorldScene extends Phaser.Scene {
   // ── Host side ──
   /** The latest keys each guest sent, by seat, with the seq they came in (older ones are ignored). */
   private remote = new Map<number, InputFields>();
+  /**
+   * How many ticks I've applied each guest's latest input for, by seat. Sent back as snapshot
+   * `ackTicks` so the guest's prediction knows exactly how far I've got (NET-01).
+   */
+  private remoteTicks = new Map<number, number>();
   /** How to send a snapshot to the guests, once I host a room that has guests. */
   private sendSnapshot: ((snapshot: SnapshotFields) => void) | undefined;
 
@@ -93,6 +102,8 @@ export class WorldScene extends Phaser.Scene {
         readonly seat: number;
         readonly sender: InputSender;
         readonly buffer: SnapshotBuffer;
+        readonly predictor: Predictor;
+        readonly clock: FixedStep; // the guest's own 20 ticks/s, for prediction
         readonly sendInput: (input: InputFields) => void;
         readonly onRoundTrip: (ms: number) => void;
       }
@@ -123,7 +134,8 @@ export class WorldScene extends Phaser.Scene {
     // 2. Give the SAME file to the engine, which only cares which tiles are walls.
     const tiled = this.cache.tilemap.get("barangay").data as TiledMap;
     this.spawn = findTiledPoint(tiled, "spawns", "player");
-    this.state = createGame(mapFromTiled(tiled), [{ id: this.localId, ...this.spawn }]);
+    this.map = mapFromTiled(tiled);
+    this.state = createGame(this.map, [{ id: this.localId, ...this.spawn }]);
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
 
@@ -183,6 +195,7 @@ export class WorldScene extends Phaser.Scene {
     const known = this.remote.get(seat);
     if (known && input.seq <= known.seq) return;
     this.remote.set(seat, input);
+    this.remoteTicks.set(seat, 0); // a new input: none of my ticks have used it yet
   }
 
   /**
@@ -199,6 +212,8 @@ export class WorldScene extends Phaser.Scene {
       seat,
       sender: new InputSender(),
       buffer: new SnapshotBuffer(),
+      predictor: new Predictor(this.map, this.localId),
+      clock: createFixedStep(TICK_MS),
       sendInput,
       onRoundTrip,
     };
@@ -212,6 +227,20 @@ export class WorldScene extends Phaser.Scene {
     if (!guest) return;
     const now = performance.now();
     if (!guest.buffer.push(snapshot, now)) return; // out of order or repeated
+
+    // Correct my prediction: where the host has me, and how far it got with my inputs.
+    // No ackTicks (a host from before NET-01) → no prediction; I'm drawn from snapshots instead.
+    const me = snapshot.players.find((p) => p.id === this.localId);
+    const ackTicks = snapshot.ackTicks?.[guest.seat];
+    if (me && ackTicks !== undefined) {
+      guest.predictor.reconcile({
+        x: me.x,
+        y: me.y,
+        ackSeq: snapshot.acks[guest.seat] ?? 0,
+        ackTicks,
+      });
+    }
+
     // The host has applied my inputs up to this seq: how long did that take?
     const ms = guest.sender.acked(snapshot.acks[guest.seat] ?? 0, now);
     if (ms !== undefined) guest.onRoundTrip(ms);
@@ -220,7 +249,7 @@ export class WorldScene extends Phaser.Scene {
   /** Phaser calls this every screen frame; `delta` is the real time since the last frame in ms. */
   override update(time: number, delta: number): void {
     const now = performance.now();
-    if (this.guest) this.updateGuest(this.guest, now);
+    if (this.guest) this.updateGuest(this.guest, delta, now);
     else this.updateHost(delta, now);
     // Candles flicker a little (each one slightly out of step with the others).
     this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
@@ -235,6 +264,12 @@ export class WorldScene extends Phaser.Scene {
     for (let i = 0; i < ticks; i++) {
       this.previous = this.state;
       this.state = step(this.state, inputs).state;
+      // Count this tick against each guest's latest input (only once they're in the game).
+      for (const seat of this.remote.keys()) {
+        if (this.find(this.state, playerId(seat))) {
+          this.remoteTicks.set(seat, (this.remoteTicks.get(seat) ?? 0) + 1);
+        }
+      }
       if (this.state.tick % TICKS_PER_SNAPSHOT === 0) this.broadcast();
     }
 
@@ -254,20 +289,42 @@ export class WorldScene extends Phaser.Scene {
   private broadcast(): void {
     if (!this.sendSnapshot || this.state.players.length < 2) return;
     // acks[seat] = the last input seq from that seat that this state includes.
-    const acks = [0, 1, 2, 3].map((seat) => this.remote.get(seat)?.seq ?? 0);
+    const seats = [0, 1, 2, 3];
+    const acks = seats.map((seat) => this.remote.get(seat)?.seq ?? 0);
+    // ackTicks[seat] = for how many ticks that input has been applied (NET-01).
+    const ackTicks = seats.map((seat) => this.remoteTicks.get(seat) ?? 0);
     this.sendSnapshot({
       tick: this.state.tick,
       players: this.state.players.map(({ id, x, y }) => ({ id, x, y })),
       acks,
+      ackTicks,
     });
   }
 
-  /** Guest: send my keys when they change; draw the host's world ~100 ms in the past. */
-  private updateGuest(guest: NonNullable<WorldScene["guest"]>, now: number): void {
+  /**
+   * Guest: send my keys when they change; predict my own player at 20 ticks/s; draw everyone
+   * else from the host's snapshots ~100 ms in the past.
+   */
+  private updateGuest(guest: NonNullable<WorldScene["guest"]>, delta: number, now: number): void {
     const message = guest.sender.update(this.readInput(), now);
     if (message) guest.sendInput(message);
+
+    // Prediction ticks at the same fixed 50 ms as the host, with the keys last SENT (see
+    // Predictor.tick for why not the keys held this instant).
+    const { ticks, alpha } = advance(guest.clock, delta);
+    for (let i = 0; i < ticks; i++) guest.predictor.tick(guest.sender.current);
+    guest.predictor.decay(delta);
+
     const players = guest.buffer.sample(now);
-    if (players) this.draw(players, now);
+    if (!players) return;
+    // Swap the snapshot's (old) copy of me for the predicted one, once prediction has started.
+    const mine = guest.predictor.position(alpha);
+    this.draw(
+      mine
+        ? [...players.filter((p) => p.id !== this.localId), { id: this.localId, ...mine }]
+        : players,
+      now,
+    );
   }
 
   private readInput(): MoveInput {
