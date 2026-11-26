@@ -9,7 +9,15 @@
 A co-op multiplayer pixel horror game in the browser, built on AWS serverless, with a data lake
 that teaches the monster. Humans, classic AI bots and LLM players share the same world.
 
-**Status:** Sprint 0 (foundations) · **Live:** [d2k0lzzbi69b8k.cloudfront.net](https://d2k0lzzbi69b8k.cloudfront.net) (placeholder page)
+**Status:** Sprint 1 done: walk together (v0.2.0) · **Live (dev):** [d2k0lzzbi69b8k.cloudfront.net](https://d2k0lzzbi69b8k.cloudfront.net)
+
+![Two browsers in the same room: the host on the left, a guest on the right](docs/media/sprint1-two-browsers.gif)
+
+*Two browsers in one room through the AWS relay: the host (left) runs the game, the guest (right)
+sends keys and draws the host's snapshots 10 times a second.*
+
+**Try it:** open the live link, press **Create room**, and share the 4-letter code. Friends open
+the same link, press **Join with code** and type it. Walk with WASD or the arrow keys.
 
 ## Highlights
 - **Real-time multiplayer, fully serverless:** API Gateway WebSockets + Lambda + DynamoDB, with
@@ -36,10 +44,12 @@ and cost, and [docs/adr/](docs/adr/) for why each choice was made.
 ## Repo layout
 ```
 packages/engine   deterministic game engine (TypeScript, no I/O)
+packages/client   the game in the browser: Phaser 4 + Vite, lobby, networking, interpolation
+packages/server   the WebSocket relay Lambda: rooms, seats, inputs and snapshots
 infra/            AWS CDK app (TypeScript)
 docs/             game design, architecture, ADRs
 ```
-More packages (`client`, `server`, `sim`, `learner`) are added as the sprints reach them.
+More packages (`sim`, `learner`) are added as the sprints reach them.
 
 ## Run it locally
 Requires Node 26 (see `.nvmrc`).
@@ -47,7 +57,10 @@ Requires Node 26 (see `.nvmrc`).
 npm ci
 npm run lint && npm run typecheck && npm test
 npm run synth -w infra     # build the CloudFormation templates (no AWS account needed)
+npm run dev -w @sundo/client   # the game at http://localhost:5173 (single player without a relay)
 ```
+Multiplayer locally needs a deployed relay: `npm run config -w @sundo/client` writes its address
+to `packages/client/public/config.local.json` (git-ignored).
 
 ## Docs
 | Doc | What's in it |
