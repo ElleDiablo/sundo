@@ -13,6 +13,7 @@
  *   sprites/glow.png      a soft warm glow, drawn additively over lit doorways and windows
  *   sprites/tikbalang.png the tikbalang (from my modern character sheet), 24 × 32 frames, 4-frame walk
  *   sprites/tikbalang-eye.png  only its eye, same frames: drawn above the darkness (S3-02)
+ *   sprites/dog.png       a dog (aso), 2 frames: asleep, barking (S3-08)
  *   sprites/light.png     a round light (white, alpha in 4 steps), cut out of the darkness (S3-01)
  *   sprites/cone.png      the flashlight's 35°-each-side, 5-tile cone, pointing right (S3-01)
  *   maps/barangay.tmj     a 48×32 Tiled map using the tileset
@@ -817,6 +818,13 @@ const AMBUSH: [number, number][] = [
   [35, 21], // a dike junction in the paddies
   [8, 27], // deep in the grove
 ];
+// Where the dogs sleep (S3-08): by Tala's house, by the second kubo, by the store, by the bridge.
+const DOGS: [number, number][] = [
+  [8, 8],
+  [37, 8],
+  [37, 15],
+  [19, 18],
+];
 // Where a caught player wakes up, lost (S3-03): along the bamboo grove's trail and its edge.
 const NALIGAW_SPOTS: [number, number][] = [
   [2, 27],
@@ -849,7 +857,7 @@ const tmj = {
   nextlayerid: 8,
   // The id Tiled gives the next object drawn by hand: past every id used below (lights 2…,
   // kid spots 100…, homes 200…, safe zones 300…, tikbalang points 400…), so a hand-added object never clashes with a generated one.
-  nextobjectid: 400 + 1 + PATROL.length + AMBUSH.length + NALIGAW_SPOTS.length,
+  nextobjectid: 400 + 1 + PATROL.length + AMBUSH.length + NALIGAW_SPOTS.length + DOGS.length,
   layers: [
     ...(["ground", "decor", "objects", "above"] as const).map((name, i) => ({
       id: i + 1,
@@ -928,6 +936,7 @@ const tmj = {
           ...PATROL.map((p) => ["patrol", p] as const),
           ...AMBUSH.map((p) => ["ambush", p] as const),
           ...NALIGAW_SPOTS.map((p) => ["grove", p] as const), // S3-03
+          ...DOGS.map((p) => ["dog", p] as const), // S3-08
         ].map(([name, [tx, ty]], i) => ({
           id: 400 + i,
           name,
@@ -1154,6 +1163,52 @@ walkFrames(plainGrid(tikData)).forEach((f, i) => {
   );
 });
 
+// A dog (S3-08), 16 × 12 frames: 0 = curled up asleep, 1 = sitting up, barking. Brown with a
+// darker back, drawn by hand here as letters (b = body, d = dark, e = eye, n = nose, . = empty).
+const DOG_COLOURS: Record<string, RGB> = {
+  b: C("#8a6a48"),
+  d: C("#5c4430"),
+  e: C("#1a1410"),
+  n: C("#2a1f18"),
+  t: C("#d8c8a8"),
+};
+const DOG_FRAMES = [
+  [
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "................",
+    "....dddddddd....",
+    "..ddbbbbbbbbdd..",
+    ".dbbbbbbbbbbbbd.",
+    ".nbbbbbbbbbbbbbd",
+    "..bbbbbbbbbbbbd.",
+    "...dddd..dddd...",
+  ],
+  [
+    "................",
+    "..........dd....",
+    ".........dbbd...",
+    ".........bebbn..",
+    ".........bbbbt..",
+    ".........dbbb...",
+    "....dddddbbb....",
+    "...dbbbbbbbb....",
+    "..dbbbbbbbbb....",
+    "d.bbbbbbbbbb....",
+    ".dbbbbbbbbbd....",
+    "..bb.bb..bb.bb..",
+  ],
+];
+const dogSheet = new Img(16 * 2, 12);
+DOG_FRAMES.forEach((rows, f) =>
+  rows.forEach((row, y) =>
+    [...row].forEach((ch, x) => ch !== "." && dogSheet.set(f * 16 + x, y, DOG_COLOURS[ch]!)),
+  ),
+);
+
 // Warm glow for lit doorways and windows (drawn with additive blending)
 const glow = new Img(64, 64);
 for (let y = 0; y < 64; y++)
@@ -1209,6 +1264,7 @@ writeFileSync(join(out, "sprites", "kids.png"), kidsSheet.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
 writeFileSync(join(out, "sprites", "light.png"), lightImg.png());
 writeFileSync(join(out, "sprites", "tikbalang.png"), tikSheet.png());
+writeFileSync(join(out, "sprites", "dog.png"), dogSheet.png());
 writeFileSync(join(out, "sprites", "tikbalang-eye.png"), eyeSheet.png());
 writeFileSync(join(out, "sprites", "cone.png"), cone.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
