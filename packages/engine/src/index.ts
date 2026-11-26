@@ -21,7 +21,8 @@ export {
   type TiledObject,
   type TiledTileset,
 } from "./tiled.ts";
-// Game state and the rules: createGame, addPlayer, startRound, kidHome and the tick function step().
+// Game state and the rules: createGame, addPlayer, startRound, kidHome, the tick function step(),
+// and the end of a round (S2-05): teamScore, secondsLeft, returnToLobby.
 export {
   addPlayer,
   CALL_RANGE,
@@ -40,10 +41,17 @@ export {
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
   removePlayer,
+  returnToLobby,
+  ROUND_TICKS,
+  SCORE_PER_KID,
+  SCORE_PER_SECOND,
+  SCORE_PER_TIME_LOST,
+  secondsLeft,
   SHIRT_COUNT,
   START_COUNTDOWN_TICKS,
   startRound,
   step,
+  teamScore,
   type GameEvent,
   type GameOptions,
   type GameState,

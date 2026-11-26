@@ -79,6 +79,13 @@ export const KID_SPEED = 150;
 // behind, so the player has to step into the doorway (or right up to it) for this to happen.
 export const HOME_RANGE = 1000;
 
+// The dawn timer (S2-05, GDD §2): a round lasts 6 minutes = 360 s × 20 ticks = 7200 ticks.
+export const ROUND_TICKS = 6 * 60 * 20;
+// The team score (GDD §2): children saved × 100 + seconds left × 2 − times lost × 25.
+export const SCORE_PER_KID = 100;
+export const SCORE_PER_SECOND = 2;
+export const SCORE_PER_TIME_LOST = 25;
+
 // ─── Types ───────────────────────────────────────────────────────────────────────────────────
 // `interface` describes the shape of an object. Types exist only while compiling: they are
 // checked by TypeScript and then erased, so they cost nothing at run time.
@@ -128,10 +135,12 @@ export interface Spot {
   readonly tileY: number;
 }
 
-// The two parts of a game (S2-01). "lobby": players gather in the kapilya plaza and pick their
-// looks. "round": the brownout has started; looks are fixed. (A string union: the type allows
-// exactly these two strings, so a typo like "lobbby" is a compile error.)
-export type Phase = "lobby" | "round";
+// The parts of a game. "lobby" (S2-01): players gather in the kapilya plaza and pick their
+// looks. "round": the brownout has started; looks are fixed and the dawn timer runs. The round
+// ends (S2-05) as "won" (every child is home) or "lost" (dawn came first); the timer stops and the
+// result screen shows until the host takes everyone back to the lobby. (A string union: the type
+// allows exactly these strings, so a typo like "lobbby" is a compile error.)
+export type Phase = "lobby" | "round" | "won" | "lost";
 
 // Everything needed to continue the game from this exact moment.
 export interface GameState {
@@ -154,6 +163,12 @@ export interface GameState {
   // The ids of the children who are home this round, in the order they got there (S2-04).
   // `home.length` is the "2 / 5" counter; empty in the lobby.
   readonly home: readonly string[];
+  // Ticks left until dawn (S2-05): ROUND_TICKS when the round starts, counting down by one a tick.
+  // Frozen when the round ends (it's the "seconds left" in the score); 0 in the lobby.
+  readonly dawn: number;
+  // How many times a player was caught and got lost (naligaw) this round: −25 each in the score.
+  // Always 0 until the tikbalang can catch anyone (S3); here so the score is complete already.
+  readonly timesLost: number;
   // An array, not an object keyed by id, so players are always processed in the same order.
   // Order will matter once players affect each other (e.g. two grabbing the same kid).
   readonly players: readonly PlayerState[];
@@ -171,7 +186,10 @@ export type GameEvent =
   // A player called a lost child and it now follows them (S2-03): for a sound, telemetry later.
   | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
   // A child reached their own house and went inside (S2-04). `player` is who led them there.
-  | { readonly type: "kid_home"; readonly kid: string; readonly player: string };
+  | { readonly type: "kid_home"; readonly kid: string; readonly player: string }
+  // The round ended (S2-05): every child is home, or dawn came first. `score` is the team score.
+  | { readonly type: "round_won"; readonly score: number }
+  | { readonly type: "dawn"; readonly score: number };
 
 // What step() returns: the next state plus whatever happened on the way there.
 export interface StepResult {
@@ -243,6 +261,8 @@ export function createGame(
     kids: [],
     homes,
     home: [],
+    dawn: 0,
+    timesLost: 0,
     players,
   };
 }
@@ -254,11 +274,60 @@ export function kidHome(homes: readonly Spot[], kidId: string): Spot | undefined
   return Number.isInteger(n) && n >= 0 ? homes[n] : undefined;
 }
 
+// Whole seconds left on the dawn timer, at 20 ticks a second (index.ts TICKS_PER_SECOND; not
+// imported from there, which would make the two files import each other): 7200 ticks → 360,
+// 19 ticks → 0 (a part second is no second).
+export function secondsLeft(dawn: number): number {
+  return Math.floor(dawn / 20);
+}
+
+// The team score (S2-05, GDD §2): children saved × 100 + seconds left × 2 − times lost × 25.
+// Takes only the three numbers it needs, so a guest can work it out from a snapshot too.
+// `saved` = how many children are home (state.home.length).
+export function teamScore(score: {
+  readonly saved: number;
+  readonly dawn: number;
+  readonly timesLost: number;
+}): number {
+  return (
+    score.saved * SCORE_PER_KID +
+    secondsLeft(score.dawn) * SCORE_PER_SECOND -
+    score.timesLost * SCORE_PER_TIME_LOST
+  );
+}
+
 // Ends the lobby and starts the round now (the host pressed Start). Returns a NEW state.
 // Calling it again once the round has started changes nothing.
 export function startRound(state: GameState): GameState {
   if (state.phase === "round") return state;
   return beginRound(state);
+}
+
+// The host takes everyone back to the kapilya plaza after a round (S2-05). Only works once the
+// round has ended (won or lost); otherwise nothing changes. Everyone is placed around `spawn`
+// again (same rule as addPlayer), in the same order, keeping their looks, and the next round
+// can be set up and started like the first. The random generator keeps going, so the next round
+// hides the children in new places.
+export function returnToLobby(
+  state: GameState,
+  spawn: { readonly tileX: number; readonly tileY: number },
+): GameState {
+  if (state.phase !== "won" && state.phase !== "lost") return state;
+  const lobby: GameState = {
+    ...state,
+    phase: "lobby",
+    countdown: null,
+    kids: [],
+    home: [],
+    dawn: 0,
+    timesLost: 0,
+    players: [],
+  };
+  // Re-add each player at the spawn: addPlayer finds each one a free tile near it.
+  return state.players.reduce(
+    (next, p) => addPlayer(next, { id: p.id, ...spawn, hat: p.hat, shirt: p.shirt }),
+    lobby,
+  );
 }
 
 // Adds a player to a running game (someone joined the room). Returns a NEW state, like step().
@@ -332,14 +401,35 @@ export function step(state: GameState, inputs: Inputs): StepResult {
 
   // The children: anyone holding E calls the nearest lost child in range, then every following
   // child walks after whoever is in front of it (S2-03).
+  // Once the round has ended (S2-05) nobody can call a child or take one home any more; players
+  // can still walk about while the result screen shows.
+  const inRound = state.phase === "round";
   const events: GameEvent[] = [];
-  const called = callKids(state.kids, players, inputs, events);
+  const called = inRound ? callKids(state.kids, players, inputs, events) : state.kids;
   const moved = moveKids(state.map, called, players);
   // Then any following child now standing at their own doorway goes inside (S2-04).
-  const { kids, home } = bringKidsHome(moved, state.homes, state.home, events);
+  const { kids, home } = inRound
+    ? bringKidsHome(moved, state.homes, state.home, events)
+    : { kids: moved, home: state.home };
 
   // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
   const next: GameState = { ...state, tick: state.tick + 1, players, kids, home };
+
+  // The round: the dawn timer counts down, and the round ends (S2-05). Every child home wins,
+  // checked first, so bringing the last one in on the very last tick still counts as a win.
+  // (`home.length > 0` too: a test map with no hiding spots has no children, and no instant win.)
+  if (inRound) {
+    const dawn = Math.max(0, state.dawn - 1);
+    if (kids.length === 0 && home.length > 0) {
+      const won: GameState = { ...next, phase: "won", dawn };
+      return { state: won, events: [...events, { type: "round_won", score: scoreOf(won) }] };
+    }
+    if (dawn === 0) {
+      const lost: GameState = { ...next, phase: "lost", dawn };
+      return { state: lost, events: [...events, { type: "dawn", score: scoreOf(lost) }] };
+    }
+    return { state: { ...next, dawn }, events };
+  }
 
   // The lobby countdown: runs while the room is full, stops if anyone leaves, and starts the
   // round when it reaches 0. `??` = "if the left side is null/undefined, use the right side".
@@ -353,13 +443,27 @@ export function step(state: GameState, inputs: Inputs): StepResult {
   return { state: { ...next, countdown: null }, events };
 }
 
+// The team score of a state (the round's numbers, read off it).
+function scoreOf(state: GameState): number {
+  return teamScore({ saved: state.home.length, dawn: state.dawn, timesLost: state.timesLost });
+}
+
 // ─── The round (private helpers) ─────────────────────────────────────────────────────────────
 
 // The lobby ends: switch phase and send the children out to hide. Used by startRound (the host's
 // button) and by the countdown, so both start a round exactly the same way.
 function beginRound(state: GameState): GameState {
   const { kids, rngState } = placeKids(state);
-  return { ...state, phase: "round", countdown: null, kids, home: [], rngState };
+  return {
+    ...state,
+    phase: "round",
+    countdown: null,
+    kids,
+    home: [],
+    dawn: ROUND_TICKS, // S2-05: 6 minutes to dawn
+    timesLost: 0,
+    rngState,
+  };
 }
 
 // Picks KID_COUNT different hiding spots at random (seeded) and puts a child on each.
