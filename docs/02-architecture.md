@@ -147,7 +147,7 @@ sequenceDiagram
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` | once |
 | `join` | player → server → host | `{ room, name, hat, shirt }` | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right }` now (`light, call, baliktad, emote` later); the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 10/s (every 2nd tick) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[], ackTicks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 10/s (every 2nd tick) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -155,6 +155,15 @@ sequenceDiagram
 snapshots. That hides network jitter. It's the standard technique in multiplayer games
 (called **snapshot interpolation**). Snapshots are timed by their `tick` (tick × 50 ms of host
 game time), not by when they arrive; late or repeated ones are ignored.
+
+**Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
+the same deterministic engine on just its own player, with the same keys it sends, and draws that
+at once. Each snapshot is the correction: start from where the host has me, drop the ticks the host
+has already applied, and replay the rest. Inputs are sent only when keys change, and the host keeps
+applying the last one, so `ackTicks[seat]` says how many ticks the host has applied `acks[seat]`
+for. If the host and the guest disagree (an input arrived a tick late), the difference fades out
+over ~100 ms instead of snapping. This is **client-side prediction with server reconciliation**,
+with the host in the server's role.
 
 **Ordering:** each message is a separate Lambda call, and two calls can finish out of order.
 So inputs carry an increasing `seq` and snapshots a `tick`; receivers drop anything older than

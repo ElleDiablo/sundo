@@ -5,7 +5,9 @@
  * Sending every frame would be 60–144 messages a second, each one a Lambda call. But keys change
  * rarely: you press W, hold it for two seconds, let go. So a message goes out only when the keys
  * change, at most once per 100 ms (≤ 10/s, architecture §4). The host keeps using the last keys it
- * heard until new ones arrive.
+ * heard until new ones arrive. The 100 ms gap is counted between CHANGES only, so a keepalive that
+ * happened to go out just before a key press doesn't hold the press back (with prediction, that
+ * wait would show as my own player starting late).
  *
  * A keepalive repeats the current keys once a second even when nothing changed. If one message
  * was ever lost (a throttled or failed Lambda), the host would otherwise keep a guest walking
@@ -18,6 +20,7 @@
  */
 import type { MoveInput } from "@sundo/engine";
 import type { InputFields } from "@sundo/server/messages";
+import type { TickInput } from "./prediction.ts";
 
 /** At most one input message per 100 ms (10 a second). */
 export const INPUT_MIN_GAP_MS = 100;
@@ -32,20 +35,32 @@ export class InputSender {
   /** The keys in the last message sent (undefined before the first). */
   private lastKeys: MoveInput | undefined;
   private lastSentAt = -Infinity;
+  /** When the keys last changed in a message sent (keepalives don't count): for the 100 ms gap. */
+  private lastChangeAt = -Infinity;
   /** When each not-yet-acknowledged message was sent: seq → time in ms. */
   private readonly sentAt = new Map<number, number>();
 
   /**
+   * The last message sent (seq + keys), or undefined before the first. This is what the host is
+   * (or soon will be) applying for me, so it's what client-side prediction steps with (NET-01).
+   */
+  get current(): TickInput | undefined {
+    return this.lastKeys && { seq: this.seq, keys: this.lastKeys };
+  }
+
+  /**
    * Called every frame with the keys held right now. Returns the message to send now, or
-   * undefined if nothing needs sending yet. A change that comes too soon after the last message
+   * undefined if nothing needs sending yet. A change that comes too soon after the last change
    * isn't lost: the keys still differ from `lastKeys`, so it goes out as soon as the gap is over.
    */
   update(keys: MoveInput, nowMs: number): InputFields | undefined {
     const changed = !this.lastKeys || !sameKeys(keys, this.lastKeys);
-    const waited = nowMs - this.lastSentAt;
+    // A change waits 100 ms after the last change; unchanged keys repeat once a second.
+    const waited = changed ? nowMs - this.lastChangeAt : nowMs - this.lastSentAt;
     if (waited < (changed ? INPUT_MIN_GAP_MS : INPUT_KEEPALIVE_MS)) return undefined;
 
     this.seq += 1;
+    if (changed) this.lastChangeAt = nowMs;
     this.lastKeys = keys;
     this.lastSentAt = nowMs;
     this.sentAt.set(this.seq, nowMs);
