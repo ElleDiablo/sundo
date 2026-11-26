@@ -25,6 +25,10 @@
  * points, chosen with the seeded generator (the host picks the seed). The host draws them from
  * its engine; guests from snapshots (`kids`), slid between snapshots like players.
  *
+ * Escorting (S2-03): holding E near a lost child makes it follow me; a hint ("Tala · E") shows
+ * over the nearest one in reach. A guest predicts its own line too (Predictor gets the kids), so
+ * calling and leading feel instant. The page hears about it through the scene event "escort".
+ *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
@@ -33,6 +37,7 @@
 import Phaser from "phaser";
 import {
   addPlayer,
+  CALL_RANGE,
   createGame,
   removePlayer,
   startRound,
@@ -55,7 +60,7 @@ import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
-import { kidRow } from "./kids.ts";
+import { KID_NAMES, kidRow } from "./kids.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { Predictor } from "./prediction.ts";
 
@@ -92,7 +97,7 @@ const DEPTH = { ground: 0, decor: 1, objects: 2, player: 10, above: 20, night: 3
 const WALK_HOLD_MS = 120;
 
 type Keys = Record<
-  "W" | "A" | "S" | "D" | "UP" | "DOWN" | "LEFT" | "RIGHT",
+  "W" | "A" | "S" | "D" | "UP" | "DOWN" | "LEFT" | "RIGHT" | "E",
   Phaser.Input.Keyboard.Key
 >;
 
@@ -114,6 +119,10 @@ export class WorldScene extends Phaser.Scene {
   private sprites = new Map<string, Phaser.GameObjects.Sprite>();
   /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
   private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  /** "Tala · E" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
+  private callHint!: Phaser.GameObjects.Text;
+  /** Children following me last frame, to notice a new one (for the "escort" event). */
+  private myEscort = new Set<string>();
   /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
   private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
@@ -206,6 +215,18 @@ export class WorldScene extends Phaser.Scene {
         repeat: -1,
       });
     }
+    // The children's walks (S2-03), one per row of kids.png.
+    for (let row = 0; row < KID_NAMES.length; row++) {
+      this.anims.create({
+        key: kidWalkKey(row),
+        frames: this.anims.generateFrameNumbers("kids", {
+          start: row * WALK_FRAMES,
+          end: row * WALK_FRAMES + WALK_FRAMES - 1,
+        }),
+        frameRate: 8,
+        repeat: -1,
+      });
+    }
     this.draw(this.state.players, 0);
 
     // 4. Night: multiply the whole screen by a cool moonlight colour, then add warm glows on top
@@ -235,13 +256,27 @@ export class WorldScene extends Phaser.Scene {
       );
     }
 
+    // The call hint: tiny text, drawn above the night tint so it stays readable in the dark.
+    this.callHint = this.add
+      .text(0, 0, "", {
+        fontFamily: "monospace",
+        fontSize: "8px",
+        color: "#f0a24a",
+        backgroundColor: "#0b0e16cc",
+        padding: { x: 2, y: 1 },
+        resolution: 4, // sharper text when the canvas is scaled up
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(DEPTH.glow + 1)
+      .setVisible(false);
+
     // 5. Camera: never show outside the map. (It follows my player: see addSprite.)
     this.cameras.main.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
 
     // 6. Keyboard: WASD and the arrow keys.
     const keyboard = this.input.keyboard;
     if (!keyboard) throw new Error("no keyboard input available");
-    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT") as Keys;
+    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E") as Keys; // E: call a child (S2-03)
 
     // 7. Typing in a text box (the room code) must not walk the tanod. Phaser "captures" these
     //    keys for the whole page: it cancels the browser's normal handling, so W, A, S and D would
@@ -342,6 +377,8 @@ export class WorldScene extends Phaser.Scene {
         y: me.y,
         ackSeq: snapshot.acks[guest.seat] ?? 0,
         ackTicks,
+        // The snapshot's children, in the engine's shape (no `following` = lost).
+        kids: (snapshot.kids ?? []).map((k) => ({ ...k, following: k.following ?? null })),
       });
     }
 
@@ -414,7 +451,20 @@ export class WorldScene extends Phaser.Scene {
       };
     });
     this.draw(drawn, now);
-    this.drawKids(this.state.kids); // they don't move yet (S2-03), so no blending between ticks
+    // The children, also part-way between the last two ticks (they walk now: S2-03).
+    const kids = this.state.kids.map((k) => {
+      const before = this.previous.kids.find((b) => b.id === k.id) ?? k;
+      return {
+        ...k,
+        x: before.x + (k.x - before.x) * alpha,
+        y: before.y + (k.y - before.y) * alpha,
+      };
+    });
+    this.drawKids(
+      kids,
+      drawn.find((p) => p.id === this.localId),
+      now,
+    );
   }
 
   /** Sends the current state to the guests, if I'm hosting a room that has any. */
@@ -432,7 +482,10 @@ export class WorldScene extends Phaser.Scene {
       acks,
       ackTicks,
       phase, // S2-01: lobby or round, so guests can show the picker or the brownout
-      kids: this.state.kids.map(({ id, x, y }) => ({ id, x, y })), // S2-02 (empty in the lobby)
+      // S2-02 (empty in the lobby); `following` only for children who follow someone (S2-03).
+      kids: this.state.kids.map(({ id, x, y, following }) =>
+        following === null ? { id, x, y } : { id, x, y, following },
+      ),
     };
     // The countdown only while it runs (`exactOptionalPropertyTypes`: no `countdown: undefined`).
     this.sendSnapshot(countdown === null ? snapshot : { ...snapshot, countdown });
@@ -465,7 +518,13 @@ export class WorldScene extends Phaser.Scene {
         : this.look;
     const me = mine ? { id: this.localId, ...mine, hat: look.hat, shirt: look.shirt } : old;
     this.draw([...players.filter((p) => p.id !== this.localId), ...(me ? [me] : [])], now);
-    this.drawKids(guest.buffer.sampleKids(now));
+    // Children: the snapshot's, except mine, which come from my prediction (instant, S2-03).
+    const predicted = guest.predictor.myKids(alpha);
+    const kids = guest.buffer
+      .sampleKids(now)
+      .filter((k) => !predicted.some((p) => p.id === k.id))
+      .map((k) => ({ ...k, following: k.following ?? null }));
+    this.drawKids([...kids, ...predicted], me, now, guest.buffer.latest?.kids ?? []);
   }
 
   /** The lobby closed ("Start walking"): from now on my keys move my tanod. */
@@ -484,6 +543,7 @@ export class WorldScene extends Phaser.Scene {
       down: k.S.isDown || k.DOWN.isDown,
       left: k.A.isDown || k.LEFT.isDown,
       right: k.D.isDown || k.RIGHT.isDown,
+      call: k.E.isDown, // S2-03: call the nearest lost child
       ...look,
     };
   }
@@ -532,34 +592,55 @@ export class WorldScene extends Phaser.Scene {
       // Lower on screen = nearer the viewer: draw players further down in front of the others.
       sprite.setDepth(DEPTH.player + y / 10_000);
 
-      // Walking or standing, and which way to face, from how far they moved since the last frame.
-      // This works the same for my player and for players whose keys I never see.
-      const last = this.motion.get(p.id);
-      const dx = last ? p.x - last.x : 0;
-      const moved = !!last && (dx !== 0 || p.y !== last.y);
-      const movedAt = moved ? now : (last?.movedAt ?? -Infinity);
-      this.motion.set(p.id, { x: p.x, y: p.y, movedAt });
-      if (dx !== 0) sprite.setFlipX(dx < 0);
-      if (now - movedAt < WALK_HOLD_MS) {
-        sprite.anims.play(walkKey(row), true); // `true`: keep going if it's already playing
-      } else {
-        sprite.anims.stop();
-        sprite.setFrame(row * WALK_FRAMES); // standing, in their look (also after a look change)
-      }
+      this.animate(sprite, p, walkKey(row), row * WALK_FRAMES, now);
+    }
+  }
+
+  /**
+   * Walking or standing, and which way to face, from how far `thing` (a player or a child) moved
+   * since the last frame. Works the same for everyone, including players whose keys I never see.
+   */
+  private animate(
+    sprite: Phaser.GameObjects.Sprite,
+    thing: { readonly id: string; readonly x: number; readonly y: number },
+    walk: string,
+    standFrame: number,
+    now: number,
+  ): void {
+    const last = this.motion.get(thing.id);
+    const dx = last ? thing.x - last.x : 0;
+    const moved = !!last && (dx !== 0 || thing.y !== last.y);
+    const movedAt = moved ? now : (last?.movedAt ?? -Infinity);
+    this.motion.set(thing.id, { x: thing.x, y: thing.y, movedAt });
+    if (dx !== 0) sprite.setFlipX(dx < 0);
+    if (now - movedAt < WALK_HOLD_MS) {
+      sprite.anims.play(walk, true); // `true`: keep going if it's already playing
+    } else {
+      sprite.anims.stop();
+      sprite.setFrame(standFrame); // standing (also right after a look change)
     }
   }
 
   /**
    * Draws the lost children (S2-02) at these positions (engine units), and nobody else: adds a
-   * sprite for each new child, removes ones no longer listed. Standing still for now; they walk
-   * once they can follow a player (S2-03).
+   * sprite for each new child, removes ones no longer listed, walks or idles each one (S2-03).
+   * Also places the call hint over the nearest lost child within reach of `me`, and emits the
+   * scene event "escort" (with the child's name) when a child starts following me according to
+   * `confirmed` (the host's own state, or a guest's newest snapshot: not a prediction, which
+   * can be wrong if someone else grabbed the same child first).
    */
-  private drawKids(kids: readonly Pick<KidState, "id" | "x" | "y">[]): void {
+  private drawKids(
+    kids: readonly KidState[],
+    me: { readonly x: number; readonly y: number } | undefined,
+    now: number,
+    confirmed: readonly { readonly id: string; readonly following?: string | null }[] = kids,
+  ): void {
     const ids = new Set(kids.map((k) => k.id));
     for (const [id, sprite] of this.kidSprites) {
       if (ids.has(id)) continue;
       sprite.destroy();
       this.kidSprites.delete(id);
+      this.motion.delete(id);
     }
     for (const kid of kids) {
       let sprite = this.kidSprites.get(kid.id);
@@ -573,7 +654,30 @@ export class WorldScene extends Phaser.Scene {
       sprite.setPosition(Math.round(x), Math.round(y));
       // Sorted by height on screen together with the players (same depth band).
       sprite.setDepth(DEPTH.player + y / 10_000);
+      const row = kidRow(kid.id);
+      this.animate(sprite, kid, kidWalkKey(row), row * WALK_FRAMES, now);
     }
+
+    // The hint: the nearest lost child within CALL_RANGE of me (the same test the engine uses).
+    const lost = me
+      ? kids
+          .filter((k) => k.following === null)
+          .map((k) => ({ k, d: (k.x - me.x) ** 2 + (k.y - me.y) ** 2 }))
+          .filter(({ d }) => d <= CALL_RANGE * CALL_RANGE)
+          .sort((a, b) => a.d - b.d)[0]?.k
+      : undefined;
+    this.callHint.setVisible(!!lost && this.controlsOn);
+    if (lost) {
+      this.callHint.setText(`${KID_NAMES[kidRow(lost.id)]} · E`);
+      this.callHint.setPosition(Math.round(toPx(lost.x)), Math.round(toPx(lost.y)) - 22);
+    }
+
+    // A child newly following me → tell the page (it shows "Tala is following you").
+    const mine = new Set(confirmed.filter((k) => k.following === this.localId).map((k) => k.id));
+    for (const id of mine) {
+      if (!this.myEscort.has(id)) this.events.emit("escort", KID_NAMES[kidRow(id)]);
+    }
+    this.myEscort = mine;
   }
 
   /** Makes a sprite for a player; the camera follows it if it's mine. draw() sets its look. */
@@ -593,4 +697,9 @@ export class WorldScene extends Phaser.Scene {
 /** The walk animation's name for a spritesheet row (one per look). */
 function walkKey(row: number): string {
   return `tanod-walk-${row}`;
+}
+
+/** The walk animation's name for a child's spritesheet row. */
+function kidWalkKey(row: number): string {
+  return `kid-walk-${row}`;
 }

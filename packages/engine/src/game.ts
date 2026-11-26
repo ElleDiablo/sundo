@@ -62,6 +62,19 @@ export const START_COUNTDOWN_TICKS = 200;
 // How many lost children each round has (S2-02, GDD: 5 of 12 possible spots).
 export const KID_COUNT = 5;
 
+// Escorting (S2-03, GDD §5). A player leading at least one child walks at 2.5 tiles/s instead
+// of 4: 2.5 / 20 ticks = 0.125 tiles = 125 units a tick (88 per axis on a diagonal).
+export const ESCORT_SPEED = 125;
+export const ESCORT_DIAGONAL_SPEED = Math.floor(ESCORT_SPEED / Math.SQRT2); // = 88
+// How close (centre to centre) a player must be to call a child with E: 1.5 tiles.
+export const CALL_RANGE = 1500;
+// The most children one player can lead at once.
+export const MAX_ESCORT = 2;
+// A following child stays this far behind whoever is in front of it (0.8 tiles)...
+export const FOLLOW_GAP = 800;
+// ...and walks at up to 3 tiles/s, a little faster than an escort, so it always catches up.
+export const KID_SPEED = 150;
+
 // ─── Types ───────────────────────────────────────────────────────────────────────────────────
 // `interface` describes the shape of an object. Types exist only while compiling: they are
 // checked by TypeScript and then erased, so they cost nothing at run time.
@@ -82,6 +95,7 @@ export interface MoveInput {
 export interface PlayerInput extends MoveInput {
   readonly hat?: number; // 0 … HAT_COUNT - 1
   readonly shirt?: number; // 0 … SHIRT_COUNT - 1
+  readonly call?: boolean; // E held: call the nearest lost child in range (S2-03)
 }
 
 // One player's state. More fields arrive in later sprints (flashlight, escorting, baliktad).
@@ -93,12 +107,15 @@ export interface PlayerState {
   readonly shirt: number; // which shirt colour (S2-01); only changes in the lobby
 }
 
-// A lost child (S2-02). Only where they are, for now; following a player (S2-03) and their
-// home (S2-04) come next. Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
+// A lost child (S2-02). Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
+// Their home (S2-04) comes next.
 export interface KidState {
   readonly id: string;
   readonly x: number; // centre, in units, like a player
   readonly y: number;
+  // The id of the player this child follows (S2-03), or null while they're lost.
+  // A player's line is in the order of the `kids` array: a newly called child goes to the end.
+  readonly following: string | null;
 }
 
 // A tile, used for the map's hiding spots.
@@ -139,7 +156,10 @@ export type Inputs = Readonly<Record<string, PlayerInput>>;
 
 // Things that happened during a step that the client reacts to once: a sound, "Naligaw!",
 // a telemetry record. More types join this union in later stories (kid_home, caught, …).
-export type GameEvent = { readonly type: "round_started" };
+export type GameEvent =
+  | { readonly type: "round_started" }
+  // A player called a lost child and it now follows them (S2-03): for a sound, telemetry later.
+  | { readonly type: "kid_called"; readonly kid: string; readonly player: string };
 
 // What step() returns: the next state plus whatever happened on the way there.
 export interface StepResult {
@@ -248,7 +268,10 @@ export function removePlayer(state: GameState, id: string): GameState {
   // Not here (e.g. a repeated "player_left" message): keep the state as it is.
   if (!state.players.some((p) => p.id === id)) return state;
   // .filter() builds a new array with everyone except them; the order of the rest is unchanged.
-  return { ...state, players: state.players.filter((p) => p.id !== id) };
+  const players = state.players.filter((p) => p.id !== id);
+  // Children who were following them are lost again, right where they stand (S2-03).
+  const kids = state.kids.map((k) => (k.following === id ? { ...k, following: null } : k));
+  return { ...state, players, kids };
 }
 
 // Advances the game by exactly one tick (50 ms of game time).
@@ -256,28 +279,38 @@ export function removePlayer(state: GameState, id: string): GameState {
 // That's what lets tests compare "before" and "after", and lets a round be replayed exactly.
 export function step(state: GameState, inputs: Inputs): StepResult {
   const inLobby = state.phase === "lobby";
+  // Who is leading children right now: they walk slower (S2-03).
+  const escorting = new Set(state.kids.flatMap((k) => (k.following ? [k.following] : [])));
   // Build the new list of players, one at a time, in the same order as before.
   const players = state.players.map((player) => {
     // Look up this player's keys. This is `undefined` if no input arrived for them this tick.
     const input = inputs[player.id];
     // `a ? b : c` means "if a then b else c". No input → the same player, standing still.
     if (!input) return player;
-    const moved = movePlayer(state.map, player, input);
+    const moved = movePlayer(state.map, player, input, escorting.has(player.id));
     // Hats and shirts can only change in the lobby. Out-of-range choices are ignored.
     return inLobby ? changeLook(moved, input) : moved;
   });
 
+  // The children: anyone holding E calls the nearest lost child in range, then every following
+  // child walks after whoever is in front of it (S2-03).
+  const events: GameEvent[] = [];
+  const called = callKids(state.kids, players, inputs, events);
+  const kids = moveKids(state.map, called, players);
+
   // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
-  const next: GameState = { ...state, tick: state.tick + 1, players };
+  const next: GameState = { ...state, tick: state.tick + 1, players, kids };
 
   // The lobby countdown: runs while the room is full, stops if anyone leaves, and starts the
   // round when it reaches 0. `??` = "if the left side is null/undefined, use the right side".
   if (inLobby && players.length >= FULL_ROOM) {
     const countdown = (state.countdown ?? START_COUNTDOWN_TICKS) - 1;
-    if (countdown <= 0) return { state: beginRound(next), events: [{ type: "round_started" }] };
-    return { state: { ...next, countdown }, events: [] };
+    if (countdown <= 0) {
+      return { state: beginRound(next), events: [...events, { type: "round_started" }] };
+    }
+    return { state: { ...next, countdown }, events };
   }
-  return { state: { ...next, countdown: null }, events: [] };
+  return { state: { ...next, countdown: null }, events };
 }
 
 // ─── The round (private helpers) ─────────────────────────────────────────────────────────────
@@ -302,10 +335,93 @@ function placeKids(state: GameState): { kids: KidState[]; rngState: number } {
     const j = rng.int(i, spots.length - 1); // one of the spots from i onwards (not used yet)
     [spots[i], spots[j]] = [spots[j]!, spots[i]!]; // swap it into place i
     const { tileX, tileY } = spots[i]!;
-    kids.push({ id: `k${i}`, x: tileX * UNITS_PER_TILE + 500, y: tileY * UNITS_PER_TILE + 500 });
+    const x = tileX * UNITS_PER_TILE + 500;
+    kids.push({ id: `k${i}`, x, y: tileY * UNITS_PER_TILE + 500, following: null });
   }
   // Save where the generator got to, so the NEXT random choice continues from here.
   return { kids, rngState: rng.state };
+}
+
+// ─── Escorting children (private helpers, S2-03) ─────────────────────────────────────────────
+
+// Players holding E each call the nearest lost child within CALL_RANGE, if they lead fewer than
+// MAX_ESCORT. One child per player per tick (holding E near two calls both, a tick apart).
+// Players are handled in order, so if two reach for the same child the first one gets it.
+// A called child moves to the END of the list: list order is line order.
+function callKids(
+  kids: readonly KidState[],
+  players: readonly PlayerState[],
+  inputs: Inputs,
+  events: GameEvent[],
+): readonly KidState[] {
+  let result = kids;
+  for (const player of players) {
+    if (!inputs[player.id]?.call) continue;
+    const leading = result.filter((k) => k.following === player.id).length;
+    if (leading >= MAX_ESCORT) continue;
+    // The nearest lost child in range. Squared distances: whole numbers, no square root needed.
+    let nearest: KidState | undefined;
+    // Start just past the range so a child exactly CALL_RANGE away still counts; `<` keeps the
+    // FIRST of two equally near children, so ties always go the same way.
+    let best = CALL_RANGE * CALL_RANGE + 1;
+    for (const kid of result) {
+      if (kid.following !== null) continue;
+      const d = (kid.x - player.x) ** 2 + (kid.y - player.y) ** 2;
+      if (d < best) {
+        best = d;
+        nearest = kid;
+      }
+    }
+    if (!nearest) continue;
+    const chosen = nearest;
+    result = [...result.filter((k) => k !== chosen), { ...chosen, following: player.id }];
+    events.push({ type: "kid_called", kid: chosen.id, player: player.id });
+  }
+  return result;
+}
+
+// Every following child walks toward whoever is in front of it in its line (the player for the
+// first child, the first child for the second) and stops FOLLOW_GAP short. Walls block children
+// like players (same box), so they slide along a wall instead of walking through it.
+// A child whose player has left stays where it is (removePlayer makes it lost anyway).
+function moveKids(
+  map: TileMap,
+  kids: readonly KidState[],
+  players: readonly PlayerState[],
+): readonly KidState[] {
+  if (!kids.some((k) => k.following !== null)) return kids; // nobody following: nothing moves
+  const moved: KidState[] = [];
+  for (const kid of kids) {
+    const leader = players.find((p) => p.id === kid.following);
+    if (!leader) {
+      moved.push(kid);
+      continue;
+    }
+    // In front of me: the last child already moved this tick in the same line, else the player.
+    // (A loop from the end instead of .findLast(), which needs a newer `lib` than ES2022.)
+    let ahead: { x: number; y: number } = leader;
+    for (let i = moved.length - 1; i >= 0; i--) {
+      if (moved[i]!.following === kid.following) {
+        ahead = moved[i]!;
+        break;
+      }
+    }
+    const dx = ahead.x - kid.x;
+    const dy = ahead.y - kid.y;
+    // Math.sqrt is exact to the last bit in every JavaScript engine (IEEE 754), so the result
+    // is the same on the host and on a guest's prediction. (Math.hypot isn't guaranteed to be.)
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const go = Math.min(KID_SPEED, dist - FOLLOW_GAP); // close enough already → go ≤ 0
+    if (go <= 0) {
+      moved.push(kid);
+      continue;
+    }
+    // A step of `go` units toward the target, rounded to whole units like every position.
+    const x = moveX(map, kid.x, kid.y, Math.round((dx * go) / dist));
+    const y = moveY(map, x, kid.y, Math.round((dy * go) / dist));
+    moved.push({ ...kid, x, y });
+  }
+  return moved;
 }
 
 // ─── Looks (private helpers) ─────────────────────────────────────────────────────────────────
@@ -332,7 +448,12 @@ function changeLook(player: PlayerState, input: PlayerInput): PlayerState {
 // ─── Movement and collision (private helpers: no `export`, so only this file can use them) ───
 
 // Turns held keys into a movement for one tick, then applies it with wall collision.
-function movePlayer(map: TileMap, player: PlayerState, input: MoveInput): PlayerState {
+function movePlayer(
+  map: TileMap,
+  player: PlayerState,
+  input: MoveInput,
+  escorting = false, // leading a child: walk at escort speed (S2-03)
+): PlayerState {
   // Number(true) = 1 and Number(false) = 0, so this gives -1 (left), 0 (none) or +1 (right).
   // A and D together → 1 - 1 = 0: opposite keys cancel out.
   const dirX = Number(input.right) - Number(input.left);
@@ -343,7 +464,14 @@ function movePlayer(map: TileMap, player: PlayerState, input: MoveInput): Player
   if (dirX === 0 && dirY === 0) return player;
 
   // Moving on BOTH axes = diagonal = use the slower per-axis speed; otherwise full speed.
-  const speed = dirX !== 0 && dirY !== 0 ? PLAYER_DIAGONAL_SPEED : PLAYER_SPEED;
+  const diagonal = dirX !== 0 && dirY !== 0;
+  const speed = escorting
+    ? diagonal
+      ? ESCORT_DIAGONAL_SPEED
+      : ESCORT_SPEED
+    : diagonal
+      ? PLAYER_DIAGONAL_SPEED
+      : PLAYER_SPEED;
 
   // Move left/right first. dirX * speed is the signed distance: e.g. -1 × 200 = -200 (left).
   const x = moveX(map, player.x, player.y, dirX * speed);

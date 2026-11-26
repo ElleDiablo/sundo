@@ -29,7 +29,7 @@
  * doesn't depend on anyone else and can be computed alone. Other players are still drawn from
  * snapshot interpolation (interpolation.ts).
  */
-import { step, type GameState, type PlayerInput, type TileMap } from "@sundo/engine";
+import { step, type GameState, type KidState, type PlayerInput, type TileMap } from "@sundo/engine";
 
 /** The input in effect for one local tick: the keys AND the seq of the message that sent them. */
 export interface TickInput {
@@ -46,6 +46,11 @@ export interface HostView {
   readonly ackSeq: number;
   /** How many ticks the host has applied that input for (snapshot ackTicks[seat]). */
   readonly ackTicks: number;
+  /**
+   * The children at the snapshot's tick (S2-03), so calling one with E and my line of followers
+   * are predicted too: they react at once instead of a round trip later.
+   */
+  readonly kids?: readonly KidState[];
 }
 
 /** Corrections fade out with this time constant: after 100 ms ~37 % is left, after 300 ms ~5 %. */
@@ -120,6 +125,8 @@ export class Predictor {
     //    movement; tick 0 is fine because step() never reads the tick number. Phase "round" and
     //    a placeholder look: prediction is only about WHERE I am (looks are drawn from my own
     //    pick or the host's snapshot), and in "round" step() ignores looks and runs no countdown.
+    //    The children come along (S2-03): lost ones can be called, mine follow my predicted
+    //    path, and ones following OTHER players stay put (their leader isn't in this game).
     let state: GameState = {
       tick: 0,
       map: this.map,
@@ -127,7 +134,7 @@ export class Predictor {
       countdown: null,
       rngState: 0,
       kidSpots: [],
-      kids: [],
+      kids: host.kids ?? [],
       players: [{ id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0 }],
     };
     let previous = state;
@@ -173,6 +180,21 @@ export class Predictor {
       x: then.x + (now.x - then.x) * alpha + this.errorX,
       y: then.y + (now.y - then.y) * alpha + this.errorY,
     };
+  }
+
+  /**
+   * The children following me in my predicted game (S2-03), part-way between the last two ticks
+   * like my own position. The scene draws these instead of the snapshot's (older) copies.
+   */
+  myKids(alpha: number): KidState[] {
+    if (!this.state || !this.previous) return [];
+    const before = this.previous;
+    return this.state.kids
+      .filter((k) => k.following === this.id)
+      .map((k) => {
+        const then = before.kids.find((b) => b.id === k.id) ?? k;
+        return { ...k, x: then.x + (k.x - then.x) * alpha, y: then.y + (k.y - then.y) * alpha };
+      });
   }
 
   private me(state: GameState) {

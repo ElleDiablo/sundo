@@ -24,10 +24,16 @@ export {
 // Game state and the rules: createGame, addPlayer, startRound and the tick function step().
 export {
   addPlayer,
+  CALL_RANGE,
   createGame,
+  ESCORT_DIAGONAL_SPEED,
+  ESCORT_SPEED,
+  FOLLOW_GAP,
   FULL_ROOM,
   HAT_COUNT,
   KID_COUNT,
+  KID_SPEED,
+  MAX_ESCORT,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
