@@ -159,6 +159,71 @@
         border-radius: 4px;
         padding: 6px 8px;
       }
+      /* S2-01: the lobby plaza's hat / shirt picker, along the bottom of the game. */
+      #wardrobe {
+        position: fixed;
+        left: 50%;
+        bottom: 40px;
+        transform: translateX(-50%);
+        display: grid;
+        gap: 8px;
+        justify-items: center;
+        background: rgba(11, 14, 22, 0.82);
+        border: 1px solid #3a4560;
+        border-radius: 6px;
+        padding: 10px 14px;
+        color: #ddd7c6;
+      }
+      #wardrobe-status {
+        margin: 0;
+      }
+      .pick {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .pick > span {
+        min-width: 3.5em;
+        text-align: right;
+        color: #8f97aa;
+      }
+      #wardrobe button {
+        font:
+          600 13px/1 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        padding: 7px 10px;
+        border-radius: 5px;
+        border: 1px solid #3a4560;
+        background: #121726;
+        color: #ddd7c6;
+        cursor: pointer;
+      }
+      #wardrobe button[aria-pressed="true"] {
+        border-color: #f0a24a;
+        box-shadow: 0 0 0 1px #f0a24a;
+      }
+      #wardrobe button.swatch {
+        width: 24px;
+        height: 24px;
+        padding: 0;
+      }
+      #wardrobe button#start-round {
+        background: #f0a24a;
+        border-color: #f0a24a;
+        color: #0b0e16;
+        padding: 9px 16px;
+      }
+      #wardrobe button:disabled {
+        opacity: 0.5;
+      }
+      #wardrobe button:focus-visible {
+        outline: 2px solid #ddd7c6;
+        outline-offset: 2px;
+      }
       footer {
         position: fixed;
         inset: auto 0 0;
@@ -195,6 +260,12 @@
         />
         <button type="submit">Join</button>
       </form>
+    </section>
+    <section id="wardrobe" aria-label="Lobby plaza" hidden>
+      <p id="wardrobe-status" role="status" aria-live="polite"></p>
+      <div class="pick" id="hats" role="group" aria-label="Hat"><span>Hat</span></div>
+      <div class="pick" id="shirts" role="group" aria-label="Shirt"><span>Shirt</span></div>
+      <button id="start-round" type="button" hidden>Start round</button>
     </section>
     <div id="room-badge" hidden></div>
     <div id="toast" role="status" aria-live="polite" hidden></div>

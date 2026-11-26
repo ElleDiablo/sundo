@@ -127,6 +127,7 @@ function blend(a: SnapshotFields, b: SnapshotFields, t: number): SnapshotPlayer[
   return b.players.map((to) => {
     const from = a.players.find((p) => p.id === to.id);
     if (!from) return to;
-    return { id: to.id, x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    // `...to` keeps the newer snapshot's other fields (hat, shirt); only the position is blended.
+    return { ...to, x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
   });
 }

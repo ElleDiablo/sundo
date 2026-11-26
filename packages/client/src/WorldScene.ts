@@ -15,6 +15,12 @@
  *        the host gets, so I move the moment I press a key instead of a round trip later
  *        (~220–330 ms). Each snapshot corrects the prediction if the host disagrees.
  *
+ * Lobby and round (S2-01): every game starts in the LOBBY phase in the kapilya plaza. Players
+ * walk around and pick a hat and shirt (setLook; sent with the keys, applied by the host's engine).
+ * The host starts the round (startRound), or a full room starts itself after a 10 s countdown.
+ * The phase travels in snapshots, and `onLobby` tells the page (wardrobe.ts) when it changes.
+ * Looks are drawn from one spritesheet with a row per hat + shirt (looks.ts).
+ *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
@@ -25,6 +31,7 @@ import {
   addPlayer,
   createGame,
   removePlayer,
+  startRound,
   findTiledPoint,
   mapFromTiled,
   step,
@@ -32,7 +39,8 @@ import {
   TILE_SIZE_PX,
   UNITS_PER_TILE,
   type GameState,
-  type MoveInput,
+  type Phase,
+  type PlayerInput,
   type PlayerState,
   type TiledMap,
   type TileMap,
@@ -41,6 +49,7 @@ import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
+import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { Predictor } from "./prediction.ts";
 
 /** Engine units → screen pixels (1 tile = 1000 units = 16 px). */
@@ -49,14 +58,26 @@ const toPx = (units: number) => (units / UNITS_PER_TILE) * TILE_SIZE_PX;
 /** The player id for a seat: seat 0 (the host) is "p0", and so on. */
 export const playerId = (seat: number) => `p${seat}`;
 
-/**
- * A colour per seat so players can tell each other apart until each has their own outfit
- * (ART-03). Multiplied over the sprite: white = unchanged.
- */
-const SEAT_TINTS = [0xffffff, 0xa8d4ff, 0xffb8a8, 0xbff0a8];
+/** The seat a player id belongs to: "p2" → 2. */
+const seatOf = (id: string) => Number(id.slice(1)) || 0;
+
+/** A player's hat and shirt numbers (see looks.ts for what they look like). */
+export interface Look {
+  readonly hat: number;
+  readonly shirt: number;
+}
+
+/** What the page needs to show about the lobby: the phase, and whole seconds left on the countdown. */
+export type OnLobby = (phase: Phase, countdownSeconds: number | null) => void;
 
 /** Moonlit night: every colour is multiplied by this (lighting proper comes in S3-01). */
 const NIGHT_TINT = 0x9ea8d9;
+/**
+ * Brownout (the round has started): a second multiply layer over the night one, making the world
+ * ~30 % darker (measured on the plaza: 76,80,94 → 52,56,72) so the candles and doorways stand out
+ * more. A separate layer switched on and off, so going back to the lobby later is one line.
+ */
+const BROWNOUT_TINT = 0xb0b4c4;
 
 const DEPTH = { ground: 0, decor: 1, objects: 2, player: 10, above: 20, night: 30, glow: 31 };
 
@@ -87,6 +108,16 @@ export class WorldScene extends Phaser.Scene {
   /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
   private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
+  private brownout!: Phaser.GameObjects.Rectangle; // extra darkness, shown once the round starts
+  /** The hat and shirt I've picked (S2-01). Seat 0 until I join someone's room as a guest. */
+  private look: Look = { hat: 0, shirt: defaultShirt(0) };
+  /** Tells the page about the lobby; called only when the phase or the seconds left change. */
+  private onLobby: OnLobby | undefined;
+  /** The last phase and countdown seconds passed to onLobby, to call it only on a change. */
+  private shownLobby: { phase: Phase | undefined; seconds: number | null } = {
+    phase: undefined,
+    seconds: null,
+  };
 
   // ── Host side ──
   /** The latest keys each guest sent, by seat, with the seq they came in (older ones are ignored). */
@@ -121,7 +152,8 @@ export class WorldScene extends Phaser.Scene {
     // Paths are relative to index.html, so the game works at any URL (localhost or CloudFront).
     this.load.tilemapTiledJSON("barangay", "assets/maps/barangay.tmj");
     this.load.image("barangay-tiles", "assets/tiles/barangay.png");
-    // 4 frames of 16 × 28 px side by side: stand, left step, stand (dip), right step.
+    // 16 × 28 px frames. Across: stand, left step, stand (dip), right step. Down: one row per
+    // hat + shirt combination (looks.ts), 24 rows.
     this.load.spritesheet("tanod", "assets/sprites/tanod.png", { frameWidth: 16, frameHeight: 28 });
     this.load.image("glow", "assets/sprites/glow.png");
   }
@@ -139,17 +171,22 @@ export class WorldScene extends Phaser.Scene {
     const tiled = this.cache.tilemap.get("barangay").data as TiledMap;
     this.spawn = findTiledPoint(tiled, "spawns", "player");
     this.map = mapFromTiled(tiled);
-    this.state = createGame(this.map, [{ id: this.localId, ...this.spawn }]);
+    this.state = createGame(this.map, [{ id: this.localId, ...this.spawn, ...this.look }]);
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
 
-    // 3. The walk animation shared by every player sprite (my tanod, 4 frames, 8 per second).
-    this.anims.create({
-      key: "tanod-walk",
-      frames: this.anims.generateFrameNumbers("tanod", { start: 0, end: 3 }),
-      frameRate: 8,
-      repeat: -1,
-    });
+    // 3. A walk animation per look (4 frames, 8 per second), named after its spritesheet row.
+    for (let row = 0; row < HATS.length * SHIRTS.length; row++) {
+      this.anims.create({
+        key: walkKey(row),
+        frames: this.anims.generateFrameNumbers("tanod", {
+          start: row * WALK_FRAMES,
+          end: row * WALK_FRAMES + WALK_FRAMES - 1,
+        }),
+        frameRate: 8,
+        repeat: -1,
+      });
+    }
     this.draw(this.state.players, 0);
 
     // 4. Night: multiply the whole screen by a cool moonlight colour, then add warm glows on top
@@ -161,6 +198,13 @@ export class WorldScene extends Phaser.Scene {
       .setScrollFactor(0) // stays put while the camera moves
       .setDepth(DEPTH.night)
       .setBlendMode(Phaser.BlendModes.MULTIPLY);
+    this.brownout = this.add
+      .rectangle(0, 0, width, height, BROWNOUT_TINT)
+      .setOrigin(0)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.night)
+      .setBlendMode(Phaser.BlendModes.MULTIPLY)
+      .setVisible(false); // switched on when the round starts (reportLobby)
     for (const light of map.getObjectLayer("lights")?.objects ?? []) {
       this.glows.push(
         this.add
@@ -206,9 +250,10 @@ export class WorldScene extends Phaser.Scene {
     this.sendSnapshot = sendSnapshot;
   }
 
-  /** A guest joined my room (I'm the host): add them to my world next to the spawn. */
+  /** A guest joined my room (I'm the host): add them to my world next to the spawn, in their seat's shirt. */
   addRemotePlayer(seat: number): void {
-    this.state = addPlayer(this.state, { id: playerId(seat), ...this.spawn });
+    const spawn = { id: playerId(seat), ...this.spawn, shirt: defaultShirt(seat) };
+    this.state = addPlayer(this.state, spawn);
     this.previous = this.state;
   }
 
@@ -239,6 +284,7 @@ export class WorldScene extends Phaser.Scene {
     onRoundTrip: (ms: number) => void,
   ): void {
     this.localId = playerId(seat);
+    this.look = { hat: 0, shirt: defaultShirt(seat) }; // my seat's starting shirt, like the host gives me
     this.guest = {
       seat,
       sender: new InputSender(),
@@ -285,11 +331,38 @@ export class WorldScene extends Phaser.Scene {
     if (ms !== undefined) guest.onRoundTrip(ms);
   }
 
+  /** The page wants to hear about the lobby: the phase, and the countdown (S2-01). */
+  listenToLobby(onLobby: OnLobby): void {
+    this.onLobby = onLobby;
+    this.shownLobby = { phase: undefined, seconds: null }; // report the current state on the next frame
+  }
+
+  /** My current hat and shirt (the picker shows these as selected). */
+  get myLook(): Look {
+    return this.look;
+  }
+
+  /**
+   * I picked a hat or shirt in the lobby. It goes out with my next input (a guest's InputSender
+   * counts it as a change) and the engine applies it, so everyone sees it; after the round has
+   * started the engine ignores it.
+   */
+  setLook(look: Look): void {
+    this.look = look;
+  }
+
+  /** Host only: start the round now (the Start button). Guests find out from the next snapshot. */
+  startRound(): void {
+    if (this.guest) return; // only the host runs the engine
+    this.state = startRound(this.state);
+  }
+
   /** Phaser calls this every screen frame; `delta` is the real time since the last frame in ms. */
   override update(time: number, delta: number): void {
     const now = performance.now();
     if (this.guest) this.updateGuest(this.guest, delta, now);
     else this.updateHost(delta, now);
+    this.reportLobby();
     // Candles flicker a little (each one slightly out of step with the others).
     this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
   }
@@ -297,7 +370,7 @@ export class WorldScene extends Phaser.Scene {
   /** Host (or alone): run the engine on everyone's keys; send a snapshot every tick (TICKS_PER_SNAPSHOT). */
   private updateHost(delta: number, now: number): void {
     const { ticks, alpha } = advance(this.clock, delta);
-    const inputs: Record<string, MoveInput> = { [this.localId]: this.readInput() };
+    const inputs: Record<string, PlayerInput> = { [this.localId]: this.readInput() };
     for (const [seat, input] of this.remote) inputs[playerId(seat)] = input;
 
     for (let i = 0; i < ticks; i++) {
@@ -316,7 +389,7 @@ export class WorldScene extends Phaser.Scene {
     const drawn = this.state.players.map((p) => {
       const before = this.find(this.previous, p.id) ?? p;
       return {
-        id: p.id,
+        ...p, // id, hat, shirt
         x: before.x + (p.x - before.x) * alpha,
         y: before.y + (p.y - before.y) * alpha,
       };
@@ -332,12 +405,16 @@ export class WorldScene extends Phaser.Scene {
     const acks = seats.map((seat) => this.remote.get(seat)?.seq ?? 0);
     // ackTicks[seat] = for how many ticks that input has been applied (NET-01).
     const ackTicks = seats.map((seat) => this.remoteTicks.get(seat) ?? 0);
-    this.sendSnapshot({
-      tick: this.state.tick,
-      players: this.state.players.map(({ id, x, y }) => ({ id, x, y })),
+    const { tick, phase, countdown } = this.state;
+    const snapshot: SnapshotFields = {
+      tick,
+      players: this.state.players.map(({ id, x, y, hat, shirt }) => ({ id, x, y, hat, shirt })),
       acks,
       ackTicks,
-    });
+      phase, // S2-01: lobby or round, so guests can show the picker or the brownout
+    };
+    // The countdown only while it runs (`exactOptionalPropertyTypes`: no `countdown: undefined`).
+    this.sendSnapshot(countdown === null ? snapshot : { ...snapshot, countdown });
   }
 
   /**
@@ -357,13 +434,16 @@ export class WorldScene extends Phaser.Scene {
     const players = guest.buffer.sample(now);
     if (!players) return;
     // Swap the snapshot's (old) copy of me for the predicted one, once prediction has started.
+    // In the lobby I'm drawn in the look I just picked (no waiting for the host); once the round
+    // has started, in the look the host has for me (it's fixed, and that's what others see).
     const mine = guest.predictor.position(alpha);
-    this.draw(
-      mine
-        ? [...players.filter((p) => p.id !== this.localId), { id: this.localId, ...mine }]
-        : players,
-      now,
-    );
+    const old = players.find((p) => p.id === this.localId);
+    const look: Look =
+      guest.buffer.latest?.phase === "round" && old
+        ? { hat: old.hat ?? 0, shirt: old.shirt ?? defaultShirt(guest.seat) }
+        : this.look;
+    const me = mine ? { id: this.localId, ...mine, hat: look.hat, shirt: look.shirt } : old;
+    this.draw([...players.filter((p) => p.id !== this.localId), ...(me ? [me] : [])], now);
   }
 
   /** The lobby closed ("Start walking"): from now on my keys move my tanod. */
@@ -372,15 +452,37 @@ export class WorldScene extends Phaser.Scene {
     this.controlsOn = true;
   }
 
-  private readInput(): MoveInput {
-    if (!this.controlsOn) return { up: false, down: false, left: false, right: false };
+  /** My keys this frame, plus my picked look (the engine only applies it in the lobby). */
+  private readInput(): PlayerInput {
+    const look = this.look;
+    if (!this.controlsOn) return { up: false, down: false, left: false, right: false, ...look };
     const k = this.keys;
     return {
       up: k.W.isDown || k.UP.isDown,
       down: k.S.isDown || k.DOWN.isDown,
       left: k.A.isDown || k.LEFT.isDown,
       right: k.D.isDown || k.RIGHT.isDown,
+      ...look,
     };
+  }
+
+  /**
+   * Tells the page about the lobby when something it shows has changed: the phase (lobby /
+   * round) or the whole seconds left on the countdown. The host reads its own engine; a guest
+   * reads the newest snapshot (a host from before S2-01 sends no phase: treated as the lobby).
+   */
+  private reportLobby(): void {
+    const latest = this.guest?.buffer.latest;
+    if (this.guest && !latest) return; // a guest before the first snapshot: nothing to say yet
+    const phase = this.guest ? (latest?.phase ?? "lobby") : this.state.phase;
+    const ticks = this.guest ? latest?.countdown : this.state.countdown;
+    const seconds =
+      ticks === undefined || ticks === null ? null : Math.ceil((ticks * TICK_MS) / 1000);
+    const shown = this.shownLobby;
+    if (phase === shown.phase && seconds === shown.seconds) return;
+    this.brownout.setVisible(phase === "round");
+    this.shownLobby = { phase, seconds };
+    this.onLobby?.(phase, seconds);
   }
 
   /**
@@ -399,6 +501,8 @@ export class WorldScene extends Phaser.Scene {
 
     for (const p of players) {
       const sprite = this.sprites.get(p.id) ?? this.addSprite(p.id);
+      // Which spritesheet row: their hat + shirt (a host from before S2-01 sends none: seat shirt).
+      const row = lookRow(p.hat ?? 0, p.shirt ?? defaultShirt(seatOf(p.id)));
       // The collision box centre is the "feet" position; draw the sprite standing on it.
       const x = toPx(p.x);
       const y = toPx(p.y) + 4;
@@ -414,23 +518,19 @@ export class WorldScene extends Phaser.Scene {
       const movedAt = moved ? now : (last?.movedAt ?? -Infinity);
       this.motion.set(p.id, { x: p.x, y: p.y, movedAt });
       if (dx !== 0) sprite.setFlipX(dx < 0);
-      if (now - movedAt < WALK_HOLD_MS) sprite.anims.play("tanod-walk", true);
-      else if (sprite.anims.isPlaying) {
+      if (now - movedAt < WALK_HOLD_MS) {
+        sprite.anims.play(walkKey(row), true); // `true`: keep going if it's already playing
+      } else {
         sprite.anims.stop();
-        sprite.setFrame(0);
+        sprite.setFrame(row * WALK_FRAMES); // standing, in their look (also after a look change)
       }
     }
   }
 
-  /** Makes a sprite for a player, tinted by seat; the camera follows it if it's mine. */
+  /** Makes a sprite for a player; the camera follows it if it's mine. draw() sets its look. */
   private addSprite(id: string): Phaser.GameObjects.Sprite {
-    const seat = Number(id.slice(1)) || 0;
     // Origin (0.5, 1) = bottom-centre, so (x, y) is where the feet are.
-    const sprite = this.add
-      .sprite(0, 0, "tanod", 0)
-      .setOrigin(0.5, 1)
-      .setDepth(DEPTH.player)
-      .setTint(SEAT_TINTS[seat % SEAT_TINTS.length] ?? 0xffffff);
+    const sprite = this.add.sprite(0, 0, "tanod", 0).setOrigin(0.5, 1).setDepth(DEPTH.player);
     this.sprites.set(id, sprite);
     if (id === this.localId) this.cameras.main.startFollow(sprite, true);
     return sprite;
@@ -439,4 +539,9 @@ export class WorldScene extends Phaser.Scene {
   private find(state: GameState, id: string): PlayerState | undefined {
     return state.players.find((p) => p.id === id);
   }
+}
+
+/** The walk animation's name for a spritesheet row (one per look). */
+function walkKey(row: number): string {
+  return `tanod-walk-${row}`;
 }

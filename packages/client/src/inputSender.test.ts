@@ -1,6 +1,6 @@
 /**
- * Tests for when a guest sends input (on change, ≤ 10/s, keepalive once a second) and for
- * measuring the round trip from the host's acks.
+ * Tests for when a guest sends input (on change, ≤ 10/s, keepalive once a second; a new hat or
+ * shirt counts as a change) and for measuring the round trip from the host's acks.
  */
 import { describe, expect, it } from "vitest";
 import { InputSender, LatencyStats } from "./inputSender.ts";
@@ -26,6 +26,18 @@ describe("InputSender", () => {
     s.update(none, 0);
     expect(s.update(none, 1000)).toEqual({ seq: 2, ...none }); // keepalive
     expect(s.update(up, 1020)).toEqual({ seq: 3, ...up }); // 20 ms later, sent at once
+  });
+
+  it("sends a new hat or shirt as a change, with the keys (S2-01)", () => {
+    const s = new InputSender();
+    s.update({ ...none, hat: 0, shirt: 1 }, 0);
+    expect(s.update({ ...none, hat: 0, shirt: 1 }, 500)).toBeUndefined(); // nothing new
+    expect(s.update({ ...none, hat: 2, shirt: 1 }, 500)).toEqual({
+      seq: 2,
+      ...none,
+      hat: 2,
+      shirt: 1,
+    });
   });
 
   it("remembers the last message sent, for prediction (NET-01)", () => {

@@ -7,6 +7,8 @@
  *   host   player_joined → add the friend; player_left → remove them; input → their keys;
  *          my snapshots → send()
  *   guest  my keys → send(); snapshot → draw it; host_left → back to the menu (S1-06)
+ * After "Start walking", the lobby plaza's picker opens (S2-01, wardrobe.ts): hat and shirt for
+ * everyone, Start round for the host. It closes, with a "Brownout!" message, when the round starts.
  * A guest also shows the measured round trip (keys → host → snapshot back) in the room badge, and
  * logs a summary to the console every 50 samples (the number recorded in the S1-05 PR).
  */
@@ -14,6 +16,7 @@ import Phaser from "phaser";
 import { LatencyStats } from "./inputSender.ts";
 import { backToMenu, setBadgeDetail, setupLobby, toast } from "./lobby.ts";
 import { onServerMessage, send } from "./net.ts";
+import { setupWardrobe } from "./wardrobe.ts";
 import { WorldScene } from "./WorldScene.ts";
 
 const game = new Phaser.Game({
@@ -31,8 +34,12 @@ const game = new Phaser.Game({
 // look inside, e.g. sundo.scene.getScene("world"). Vite removes this block from production builds.
 if (import.meta.env.DEV) (window as unknown as { sundo: Phaser.Game }).sundo = game;
 
+/** Set once the lobby puts me in a room: the picker needs to know if I'm the host. */
+let mySeat: number | undefined;
+
 setupLobby(
   (room) => {
+    mySeat = room.seat;
     // The world scene is long created by the time anyone clicks a lobby button.
     const world = game.scene.getScene("world") as WorldScene;
     if (room.seat === 0) {
@@ -89,6 +96,25 @@ setupLobby(
     });
     room.socket.addEventListener("close", () => toast("Disconnected from the room"));
   },
-  // "Start walking": only now do my keys move my tanod (the menu doesn't walk it).
-  () => (game.scene.getScene("world") as WorldScene).enableControls(),
+  // "Start walking": only now do my keys move my tanod (the menu doesn't walk it), and the
+  // lobby plaza's picker opens.
+  () => {
+    const world = game.scene.getScene("world") as WorldScene;
+    world.enableControls();
+    const wardrobe = setupWardrobe({
+      isHost: mySeat === 0,
+      look: world.myLook,
+      onLook: (look) => world.setLook(look),
+      onStart: () => world.startRound(),
+    });
+    let shownPhase: string | undefined;
+    world.listenToLobby((phase, seconds) => {
+      wardrobe.show(phase, seconds);
+      // Lobby → round: the brownout. (Also shown to someone who joins a round already running.)
+      if (phase === "round" && shownPhase !== "round") {
+        toast("Brownout! Bring the children home before dawn.", 5000);
+      }
+      shownPhase = phase;
+    });
+  },
 );
