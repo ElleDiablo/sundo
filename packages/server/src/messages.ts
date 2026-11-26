@@ -26,6 +26,8 @@ export interface InputFields {
   /** The hat and shirt colour I picked in the lobby (S2-01). Optional: older clients don't send them. */
   readonly hat?: number;
   readonly shirt?: number;
+  /** E held: call the nearest lost child (S2-03). Optional: older clients don't send it. */
+  readonly call?: boolean;
 }
 
 /** One player in a snapshot: position in engine units (1 tile = 1000), and looks (S2-01). */
@@ -42,6 +44,8 @@ export interface SnapshotKid {
   readonly id: string;
   readonly x: number;
   readonly y: number;
+  /** The player id this child follows (S2-03); missing while the child is lost. */
+  readonly following?: string;
 }
 
 /** The most children a snapshot may list (5 per round; a little room for later designs). */
@@ -201,7 +205,12 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
     left: left as boolean,
     right: right as boolean,
   };
-  return copyLook(v, input) ? input : undefined;
+  if (!copyLook(v, input)) return undefined;
+  if (v["call"] !== undefined) {
+    if (typeof v["call"] !== "boolean") return undefined;
+    input.call = v["call"];
+  }
+  return input;
 }
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
@@ -250,9 +259,13 @@ function readKids(kids: unknown): SnapshotKid[] | undefined {
   const checked: SnapshotKid[] = [];
   for (const k of kids as unknown[]) {
     if (!k || typeof k !== "object") return undefined;
-    const { id, x, y } = k as Record<string, unknown>;
+    const { id, x, y, following } = k as Record<string, unknown>;
     if (typeof id !== "string" || id.length > 8 || !isCoord(x) || !isCoord(y)) return undefined;
-    checked.push({ id, x, y }); // known fields only
+    if (following !== undefined && (typeof following !== "string" || following.length > 8)) {
+      return undefined;
+    }
+    // Known fields only; `following` only when there is one.
+    checked.push(following === undefined ? { id, x, y } : { id, x, y, following });
   }
   return checked;
 }

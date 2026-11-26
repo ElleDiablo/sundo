@@ -115,6 +115,7 @@ describe("input and snapshot messages", () => {
       '{"seq":1,"up":"yes","down":false,"left":false,"right":false}',
       '{"seq":1,"up":true,"down":false,"left":false,"right":false,"hat":-1}',
       '{"seq":1,"up":true,"down":false,"left":false,"right":false,"shirt":2.5}',
+      '{"seq":1,"up":true,"down":false,"left":false,"right":false,"call":"yes"}',
       "[]",
     ]) {
       expect(readInputBody(body), body).toBeUndefined();
@@ -136,6 +137,7 @@ describe("input and snapshot messages", () => {
       { ...snapshot, kids: "five" },
       { ...snapshot, kids: Array.from({ length: 9 }, (_, i) => ({ id: `k${i}`, x: 0, y: 0 })) },
       { ...snapshot, kids: [{ id: "k0", x: "here", y: 0 }] },
+      { ...snapshot, kids: [{ id: "k0", x: 0, y: 0, following: 3 }] },
     ]) {
       expect(readSnapshotBody(JSON.stringify(bad)), JSON.stringify(bad)).toBeUndefined();
     }
@@ -160,5 +162,15 @@ describe("input and snapshot messages", () => {
       ...round,
       kids: [{ id: "k0", x: 2500, y: 3500 }],
     });
+  });
+
+  it("passes on E (call) in inputs and who each child follows (S2-03)", () => {
+    const input = { seq: 9, up: false, down: false, left: false, right: true, call: true };
+    expect(readInputBody(JSON.stringify(input))).toEqual(input);
+    const kids = [
+      { id: "k0", x: 1, y: 2, following: "p1" },
+      { id: "k1", x: 3, y: 4 },
+    ];
+    expect(readSnapshotBody(JSON.stringify({ ...snapshot, kids }))).toEqual({ ...snapshot, kids });
   });
 });
