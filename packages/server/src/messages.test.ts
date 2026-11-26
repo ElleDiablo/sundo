@@ -247,4 +247,10 @@ describe("input and snapshot messages", () => {
     const bad = { ...snapshot, players: [{ id: "p0", x: 1, y: 2, bal: -1 }] };
     expect(readSnapshotBody(JSON.stringify(bad))).toBeUndefined();
   });
+
+  it("passes on which dogs are barking (S3-08), refusing a bad list", () => {
+    const loud = { ...snapshot, barking: ["d0", "d3"] };
+    expect(readSnapshotBody(JSON.stringify(loud))).toEqual(loud);
+    expect(readSnapshotBody(JSON.stringify({ ...snapshot, barking: [1] }))).toBeUndefined();
+  });
 });
