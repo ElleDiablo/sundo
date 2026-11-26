@@ -74,6 +74,10 @@ export const MAX_ESCORT = 2;
 export const FOLLOW_GAP = 800;
 // ...and walks at up to 3 tiles/s, a little faster than an escort, so it always catches up.
 export const KID_SPEED = 150;
+// Going home (S2-04): a following child whose centre comes within 1 tile of the centre of their
+// own house's doorway goes inside. The doorway is one tile wide and the child trails 0.8 tiles
+// behind, so the player has to step into the doorway (or right up to it) for this to happen.
+export const HOME_RANGE = 1000;
 
 // ─── Types ───────────────────────────────────────────────────────────────────────────────────
 // `interface` describes the shape of an object. Types exist only while compiling: they are
@@ -108,7 +112,7 @@ export interface PlayerState {
 }
 
 // A lost child (S2-02). Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
-// Their home (S2-04) comes next.
+// Child "k<n>" lives in the nth house of the map's homes (S2-04, see kidHome).
 export interface KidState {
   readonly id: string;
   readonly x: number; // centre, in units, like a player
@@ -142,8 +146,14 @@ export interface GameState {
   readonly rngState: number;
   // Where children can hide (the map's "kid" points). Fixed for the whole game.
   readonly kidSpots: readonly Spot[];
-  // The lost children: none in the lobby, KID_COUNT once the round starts (S2-02).
+  // The lost children: none in the lobby, KID_COUNT once the round starts (S2-02). A child who
+  // gets home leaves this list (S2-04).
   readonly kids: readonly KidState[];
+  // Each house's doorway, in the map's order: child "k<n>" lives at homes[n] (S2-04). Fixed.
+  readonly homes: readonly Spot[];
+  // The ids of the children who are home this round, in the order they got there (S2-04).
+  // `home.length` is the "2 / 5" counter; empty in the lobby.
+  readonly home: readonly string[];
   // An array, not an object keyed by id, so players are always processed in the same order.
   // Order will matter once players affect each other (e.g. two grabbing the same kid).
   readonly players: readonly PlayerState[];
@@ -159,7 +169,9 @@ export type Inputs = Readonly<Record<string, PlayerInput>>;
 export type GameEvent =
   | { readonly type: "round_started" }
   // A player called a lost child and it now follows them (S2-03): for a sound, telemetry later.
-  | { readonly type: "kid_called"; readonly kid: string; readonly player: string };
+  | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
+  // A child reached their own house and went inside (S2-04). `player` is who led them there.
+  | { readonly type: "kid_home"; readonly kid: string; readonly player: string };
 
 // What step() returns: the next state plus whatever happened on the way there.
 export interface StepResult {
@@ -180,6 +192,7 @@ export interface PlayerSpawn {
 export interface GameOptions {
   readonly seed?: number; // starts the random generator (the host picks one per game)
   readonly kidSpots?: readonly Spot[]; // the map's hiding spots
+  readonly homes?: readonly Spot[]; // the map's house doorways, child k0's first (S2-04)
 }
 
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
@@ -195,6 +208,13 @@ export function createGame(
   for (const { tileX, tileY } of kidSpots) {
     if (isWall(map, tileX, tileY)) {
       throw new RangeError(`kid spot (${tileX}, ${tileY}) is inside a wall`);
+    }
+  }
+  // Same for a doorway: a child could never be led into a wall.
+  const homes = options.homes ?? [];
+  for (const { tileX, tileY } of homes) {
+    if (isWall(map, tileX, tileY)) {
+      throw new RangeError(`home (${tileX}, ${tileY}) is inside a wall`);
     }
   }
   // .map() builds a NEW array by turning each spawn into a PlayerState.
@@ -213,7 +233,25 @@ export function createGame(
   // Every game starts in the lobby, with no countdown running and no children out yet.
   // `>>> 0` turns the seed into a whole 32-bit number, the form the generator works with.
   const rngState = (options.seed ?? 1) >>> 0;
-  return { tick: 0, map, phase: "lobby", countdown: null, rngState, kidSpots, kids: [], players };
+  return {
+    tick: 0,
+    map,
+    phase: "lobby",
+    countdown: null,
+    rngState,
+    kidSpots,
+    kids: [],
+    homes,
+    home: [],
+    players,
+  };
+}
+
+// Where child `kidId` lives (S2-04): "k2" → homes[2]. Undefined for an id with no house (a map
+// with fewer houses than children, or a made-up id): that child can't be taken home.
+export function kidHome(homes: readonly Spot[], kidId: string): Spot | undefined {
+  const n = Number(kidId.slice(1)); // "k2" → 2; anything that isn't a number gives NaN
+  return Number.isInteger(n) && n >= 0 ? homes[n] : undefined;
 }
 
 // Ends the lobby and starts the round now (the host pressed Start). Returns a NEW state.
@@ -296,10 +334,12 @@ export function step(state: GameState, inputs: Inputs): StepResult {
   // child walks after whoever is in front of it (S2-03).
   const events: GameEvent[] = [];
   const called = callKids(state.kids, players, inputs, events);
-  const kids = moveKids(state.map, called, players);
+  const moved = moveKids(state.map, called, players);
+  // Then any following child now standing at their own doorway goes inside (S2-04).
+  const { kids, home } = bringKidsHome(moved, state.homes, state.home, events);
 
   // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
-  const next: GameState = { ...state, tick: state.tick + 1, players, kids };
+  const next: GameState = { ...state, tick: state.tick + 1, players, kids, home };
 
   // The lobby countdown: runs while the room is full, stops if anyone leaves, and starts the
   // round when it reaches 0. `??` = "if the left side is null/undefined, use the right side".
@@ -319,7 +359,7 @@ export function step(state: GameState, inputs: Inputs): StepResult {
 // button) and by the countdown, so both start a round exactly the same way.
 function beginRound(state: GameState): GameState {
   const { kids, rngState } = placeKids(state);
-  return { ...state, phase: "round", countdown: null, kids, rngState };
+  return { ...state, phase: "round", countdown: null, kids, home: [], rngState };
 }
 
 // Picks KID_COUNT different hiding spots at random (seeded) and puts a child on each.
@@ -422,6 +462,35 @@ function moveKids(
     moved.push({ ...kid, x, y });
   }
   return moved;
+}
+
+// Takes every FOLLOWING child within HOME_RANGE of their own doorway out of `kids` and adds them
+// to `home`, with a kid_home event each (S2-04). A lost child sitting near their house doesn't go
+// in by themselves: someone has to bring them. Returns the same arrays when nobody got home, so
+// the usual tick copies nothing.
+function bringKidsHome(
+  kids: readonly KidState[],
+  homes: readonly Spot[],
+  home: readonly string[],
+  events: GameEvent[],
+): { kids: readonly KidState[]; home: readonly string[] } {
+  const arrived = kids.filter((kid) => {
+    if (kid.following === null) return false;
+    const door = kidHome(homes, kid.id);
+    if (!door) return false;
+    // The doorway tile's centre, in units, and the squared distance to it (no square root).
+    const dx = door.tileX * UNITS_PER_TILE + 500 - kid.x;
+    const dy = door.tileY * UNITS_PER_TILE + 500 - kid.y;
+    return dx * dx + dy * dy <= HOME_RANGE * HOME_RANGE;
+  });
+  if (arrived.length === 0) return { kids, home };
+  for (const kid of arrived) {
+    events.push({ type: "kid_home", kid: kid.id, player: kid.following! });
+  }
+  return {
+    kids: kids.filter((k) => !arrived.includes(k)),
+    home: [...home, ...arrived.map((k) => k.id)],
+  };
 }
 
 // ─── Looks (private helpers) ─────────────────────────────────────────────────────────────────
