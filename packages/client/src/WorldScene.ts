@@ -54,6 +54,10 @@
  * their children. Snapshots carry the last catch (`caught`: who, which tick); a new one fires the
  * scene event "naligaw" (player id, and whether it's me) for the message, the sound and a shake.
  *
+ * Baliktad (S3-04): Q (a tap is kept for 150 ms, like an emote) turns my shirt inside out: the
+ * engine hides me from the tikbalang for 5 s, then I wait 30 s. Everyone sees a hidden tanod
+ * faded and pale; the HUD shows when Q is ready again.
+ *
  * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
  * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
  * so everyone draws the same speech bubble ("Dito!") over my tanod.
@@ -140,6 +144,8 @@ export interface RoundInfo {
   readonly score: number;
   /** My flashlight battery, 0–100 % (S3-01). */
   readonly battery: number;
+  /** Whole seconds until my baliktad is ready (S3-04); 0 = ready now. */
+  readonly baliktadIn: number;
 }
 export type OnRound = (info: RoundInfo) => void;
 
@@ -189,7 +195,8 @@ type Keys = Record<
   | "TWO"
   | "THREE"
   | "FOUR"
-  | "SPACE",
+  | "SPACE"
+  | "Q",
   Phaser.Input.Keyboard.Key
 >;
 
@@ -202,7 +209,14 @@ type DrawnPlayer =
       faceX?: number;
       faceY?: number;
       light?: boolean;
+      baliktad?: number; // S3-04: ticks left in baliktad
     });
+
+/** Is this tanod in baliktad (S3-04)? From the engine (`baliktad`) or a snapshot (`bal`). */
+function inBaliktad(p: DrawnPlayer): boolean {
+  if ("baliktad" in p && p.baliktad !== undefined) return p.baliktad > 0;
+  return "bal" in p && (p.bal ?? 0) > 0;
+}
 
 /** A snapshot's packed facing (0–8) → faceX, faceY (each −1, 0 or 1). Missing → facing down. */
 function unpackFace(face: number | undefined): { faceX: number; faceY: number } {
@@ -233,6 +247,8 @@ export class WorldScene extends Phaser.Scene {
   private bubbles = new Map<string, Phaser.GameObjects.Text>();
   /** The emote key I last pressed (0–3) and until when it stays in my input (EMOTE_HOLD_MS). */
   private emoteKey: { emote: number; until: number } | undefined;
+  /** Until when a tap of Q stays in my input (S3-04; same reason as EMOTE_HOLD_MS). */
+  private baliktadUntil = 0;
   /** The tikbalang (S3-02) and its eye glint (above the darkness); hidden outside the round. */
   private tikSprite!: Phaser.GameObjects.Sprite;
   private tikEye!: Phaser.GameObjects.Sprite;
@@ -441,7 +457,11 @@ export class WorldScene extends Phaser.Scene {
     if (!keyboard) throw new Error("no keyboard input available");
     // E: call a child (S2-03). ONE–FOUR: the number keys 1–4 above the letters, emotes (S2-06).
     // SPACE: the flashlight (S3-01).
-    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR,SPACE") as Keys;
+    // Q: baliktad (S3-04).
+    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR,SPACE,Q") as Keys;
+    this.keys.Q.on("down", () => {
+      if (this.controlsOn) this.baliktadUntil = performance.now() + EMOTE_HOLD_MS;
+    });
     // A press of 1–4 is remembered for EMOTE_HOLD_MS, so even a very quick tap reaches the engine.
     (["ONE", "TWO", "THREE", "FOUR"] as const).forEach((name, emote) =>
       this.keys[name].on("down", () => {
@@ -680,7 +700,20 @@ export class WorldScene extends Phaser.Scene {
       // The emote only while one is showing (S2-06), like a child's `following`.
       // S3-01: facing packed into one number, the light only while on, and the battery.
       players: this.state.players.map(
-        ({ id, x, y, hat, shirt, emote, faceX, faceY, light, battery }) => ({
+        ({
+          id,
+          x,
+          y,
+          hat,
+          shirt,
+          emote,
+          faceX,
+          faceY,
+          light,
+          battery,
+          baliktad,
+          baliktadCooldown,
+        }) => ({
           id,
           x,
           y,
@@ -690,6 +723,9 @@ export class WorldScene extends Phaser.Scene {
           face: packFace(faceX, faceY),
           ...(light ? { light } : {}),
           battery,
+          // S3-04: baliktad and its cooldown, only while they run.
+          ...(baliktad > 0 ? { bal: baliktad } : {}),
+          ...(baliktadCooldown > 0 ? { cool: baliktadCooldown } : {}),
         }),
       ),
       acks,
@@ -755,6 +791,7 @@ export class WorldScene extends Phaser.Scene {
           shirt: look.shirt,
           emote: old?.emote ?? null,
           ...guest.predictor.facing(),
+          baliktad: old?.bal ?? 0, // S3-04: the host decides it; from the snapshot
         }
       : old;
     this.draw([...players.filter((p) => p.id !== this.localId), ...(me ? [me] : [])], now);
@@ -810,6 +847,8 @@ export class WorldScene extends Phaser.Scene {
       right: k.D.isDown || k.RIGHT.isDown,
       call: k.E.isDown, // S2-03: call the nearest lost child
       light: k.SPACE.isDown, // S3-01: the flashlight
+      // S3-04: baliktad while Q is held, or for a moment after a quick tap.
+      baliktad: k.Q.isDown || performance.now() < this.baliktadUntil,
       ...look,
     };
     // S2-06: the emote key, while it's held or for EMOTE_HOLD_MS after it was pressed.
@@ -880,9 +919,13 @@ export class WorldScene extends Phaser.Scene {
     const dawn = this.guest ? (latest?.dawn ?? 0) : this.state.dawn;
     const timesLost = this.guest ? (latest?.timesLost ?? 0) : this.state.timesLost;
     // My battery (S3-01): the host's engine, or my copy in the newest snapshot.
+    const mine = latest?.players.find((p) => p.id === this.localId);
+    const engineMe = this.find(this.state, this.localId);
     const battery = this.guest
-      ? (latest?.players.find((p) => p.id === this.localId)?.battery ?? BATTERY_MAX)
-      : (this.find(this.state, this.localId)?.battery ?? BATTERY_MAX);
+      ? (mine?.battery ?? BATTERY_MAX)
+      : (engineMe?.battery ?? BATTERY_MAX);
+    // S3-04: ticks until my baliktad is ready.
+    const cooldown = this.guest ? (mine?.cool ?? 0) : (engineMe?.baliktadCooldown ?? 0);
 
     // The counter first, so a "kid_home" listener already sees the new numbers. The score is the
     // engine's own formula, so host and guests show the same number.
@@ -894,6 +937,7 @@ export class WorldScene extends Phaser.Scene {
       timesLost,
       score: teamScore({ saved: home.length, dawn, timesLost }),
       battery: Math.ceil((battery / BATTERY_MAX) * 100),
+      baliktadIn: Math.ceil((cooldown * TICK_MS) / 1000),
     };
     const text = JSON.stringify(info);
     if (text !== this.shownRound) {
@@ -948,6 +992,9 @@ export class WorldScene extends Phaser.Scene {
       sprite.setDepth(DEPTH.player + y / 10_000);
 
       this.animate(sprite, p, walkKey(row), row * WALK_FRAMES, now);
+      // S3-04: in baliktad, faded and pale (the shirt's inside showing), for everyone to see.
+      if (inBaliktad(p)) sprite.setAlpha(0.55).setTint(0xc8d0ff);
+      else sprite.setAlpha(1).clearTint();
       this.drawBubble(p.id, emoteText(p.emote), Math.round(x), Math.round(y) - 30);
 
       // S3-01: a small glow around every tanod, and their flashlight cone while it's on. The

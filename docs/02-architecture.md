@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?,face,light?,battery}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost, tikbalang{x,y,mode,faceX}?, caught{player,tick}? }` now; only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?,face,light?,battery,bal?,cool?}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost, tikbalang{x,y,mode,faceX}?, caught{player,tick}? }` now; only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -221,6 +221,11 @@ shows (drawn above the darkness while it stalks or chases).
 `grove` point (seeded), adds one to `timesLost` (−25 in the score) and scatters the children
 following them, each to the nearest hiding spot no lost child is on. `lastCaught` (who, which tick)
 travels in snapshots so every browser announces it once; the caught player's screen shakes.
+
+**Baliktad (S3-04):** Q adds `baliktad` to the input (a tap is kept 150 ms, like an emote). During
+the round, when ready, the engine sets 100 ticks of baliktad and a 600-tick cooldown. `canSee`
+ignores a player in baliktad, and a stalk or chase on them ends at once. Snapshots carry `bal` and
+`cool` while they run (a faded, pale tanod for everyone; "Q 12s" in my HUD).
 
 **Emotes (S2-06, ADR-0005):** keys 1–4 add `emote` (0–3) to the next `input`; a quick tap stays in
 the input for 150 ms so it can't fall between two ticks or two messages. The host's engine shows it
