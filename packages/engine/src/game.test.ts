@@ -9,6 +9,7 @@ import {
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
+  removePlayer,
   step,
   type GameState,
   type Inputs,
@@ -80,6 +81,29 @@ describe("addPlayer", () => {
     expect(addPlayer(before, { id: "p0", tileX: 2, tileY: 2 })).toBe(before);
     addPlayer(before, { id: "p1", tileX: 5, tileY: 5 });
     expect(before.players).toHaveLength(1);
+  });
+});
+
+describe("removePlayer", () => {
+  it("takes the player out and keeps everyone else in order", () => {
+    let game = createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }]);
+    game = addPlayer(game, { id: "p1", tileX: 5, tileY: 5 });
+    game = addPlayer(game, { id: "p2", tileX: 5, tileY: 5 });
+    const after = removePlayer(game, "p1");
+    expect(after.players.map((p) => p.id)).toEqual(["p0", "p2"]);
+    expect(game.players).toHaveLength(3); // the old state is untouched
+  });
+
+  it("ignores someone who isn't in the game", () => {
+    const game = createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }]);
+    expect(removePlayer(game, "p3")).toBe(game);
+  });
+
+  it("frees their tile, so someone rejoining lands on it again", () => {
+    let game = createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }]);
+    game = addPlayer(game, { id: "p1", tileX: 5, tileY: 5 });
+    game = addPlayer(removePlayer(game, "p1"), { id: "p1", tileX: 5, tileY: 5 });
+    expect(player(game, "p1")).toMatchObject({ x: 6500, y: 5500 });
   });
 });
 
