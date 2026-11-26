@@ -7,7 +7,8 @@
  *                                                            host gets player_joined
  *                     {"action":"input",…}    guest → host   the keys a guest is holding (S1-05)
  *                     {"action":"snapshot",…} host → guests  where everyone is (S1-05)
- *   relay → browser   join_error when a code is wrong, the room is full, …
+ *   relay → browser   join_error when a code is wrong, the room is full, the host has left, …
+ *                     player_left (to the host) / host_left (to guests) when a tab closes (S1-06)
  *
  * Everything that arrives from the network is text that anyone could have written, so every
  * message is checked field by field before it's used (the parse… functions below).
@@ -65,6 +66,10 @@ export type ServerMessage =
   | { readonly type: "room_joined"; readonly code: string; readonly seat: number }
   /** To the host: someone took this seat. */
   | { readonly type: "player_joined"; readonly seat: number }
+  /** To the host: the guest in this seat left (closed or reloaded their tab). S1-06 */
+  | { readonly type: "player_left"; readonly seat: number }
+  /** To each guest: the host left, so nobody runs the game any more and the room is over. S1-06 */
+  | { readonly type: "host_left" }
   /** To the host: a guest's keys. The relay adds the seat, so a guest can't pretend to be someone else. */
   | ({ readonly type: "input"; readonly seat: number } & InputFields)
   /** To each guest: where everyone is, passed on from the host. */
@@ -75,7 +80,13 @@ export type ServerMessage =
   | { readonly type: "error"; readonly message: string };
 
 /** The reasons a join can fail, for checking messages from the network. */
-const JOIN_ERROR_REASONS: readonly string[] = ["bad_code", "not_found", "full", "already_in_room"];
+const JOIN_ERROR_REASONS: readonly string[] = [
+  "bad_code",
+  "not_found",
+  "ended",
+  "full",
+  "already_in_room",
+];
 
 /**
  * Parses a message from the relay, or returns undefined if it isn't one we know.
@@ -105,6 +116,10 @@ export function parseServerMessage(data: string): ServerMessage | undefined {
       return code && seat !== undefined ? { type: "room_joined", code, seat } : undefined;
     case "player_joined":
       return seat !== undefined ? { type: "player_joined", seat } : undefined;
+    case "player_left":
+      return seat !== undefined ? { type: "player_left", seat } : undefined;
+    case "host_left":
+      return { type: "host_left" };
     case "join_error": {
       const reason = str("reason");
       return reason && JOIN_ERROR_REASONS.includes(reason) && message

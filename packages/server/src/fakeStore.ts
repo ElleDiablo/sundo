@@ -22,10 +22,16 @@ export class FakeStore implements RoomStore {
     ops.forEach((op, i) => {
       if (op.kind === "mustExist" && !this.items.has(id(op.key))) failed.push(i);
       if (op.kind === "put" && op.onlyIfNew && this.items.has(id(op.item))) failed.push(i);
+      if (op.kind === "delete" && op.onlyIfConnId !== undefined) {
+        if (this.items.get(id(op.key))?.["connId"] !== op.onlyIfConnId) failed.push(i);
+      }
     });
     if (failed.length > 0) return { ok: false, failed };
-    // Phase 2: all conditions passed, so write every item.
-    for (const op of ops) if (op.kind === "put") this.items.set(id(op.item), op.item);
+    // Phase 2: all conditions passed, so apply every write and delete.
+    for (const op of ops) {
+      if (op.kind === "put") this.items.set(id(op.item), op.item);
+      if (op.kind === "delete") this.items.delete(id(op.key));
+    }
     return { ok: true };
   }
 

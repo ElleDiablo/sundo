@@ -57,25 +57,7 @@ export class DynamoRoomStore implements RoomStore {
     try {
       await this.db.send(
         new TransactWriteCommand({
-          TransactItems: ops.map((op) =>
-            op.kind === "mustExist"
-              ? // A ConditionCheck writes nothing; it only makes the transaction fail if the item is missing.
-                {
-                  ConditionCheck: {
-                    TableName: this.table,
-                    Key: { PK: op.key.PK, SK: op.key.SK },
-                    ConditionExpression: "attribute_exists(PK)",
-                  },
-                }
-              : {
-                  Put: {
-                    TableName: this.table,
-                    Item: op.item,
-                    // "Only if new": fail if an item with these keys is already there.
-                    ...(op.onlyIfNew ? { ConditionExpression: "attribute_not_exists(PK)" } : {}),
-                  },
-                },
-          ),
+          TransactItems: ops.map((op) => this.toTransactItem(op)),
         }),
       );
       return { ok: true };
@@ -89,6 +71,45 @@ export class DynamoRoomStore implements RoomStore {
         if (failed.length > 0) return { ok: false, failed };
       }
       throw error;
+    }
+  }
+
+  /** One step of our transaction in DynamoDB's shape. */
+  private toTransactItem(op: WriteOp) {
+    const TableName = this.table;
+    switch (op.kind) {
+      case "mustExist":
+        // A ConditionCheck writes nothing; it only makes the transaction fail if the item is missing.
+        return {
+          ConditionCheck: {
+            TableName,
+            Key: { PK: op.key.PK, SK: op.key.SK },
+            ConditionExpression: "attribute_exists(PK)",
+          },
+        };
+      case "put":
+        return {
+          Put: {
+            TableName,
+            Item: op.item,
+            // "Only if new": fail if an item with these keys is already there.
+            ...(op.onlyIfNew ? { ConditionExpression: "attribute_not_exists(PK)" } : {}),
+          },
+        };
+      case "delete":
+        return {
+          Delete: {
+            TableName,
+            Key: { PK: op.key.PK, SK: op.key.SK },
+            // Only delete it if it still belongs to this connection.
+            ...(op.onlyIfConnId !== undefined
+              ? {
+                  ConditionExpression: "connId = :connId",
+                  ExpressionAttributeValues: { ":connId": op.onlyIfConnId },
+                }
+              : {}),
+          },
+        };
     }
   }
 }

@@ -5,7 +5,14 @@
 import { describe, expect, it } from "vitest";
 import { CODE_LETTERS } from "./codes.ts";
 import { FakeStore } from "./fakeStore.ts";
-import { createRoom, joinRoom, MAX_PLAYERS, ROOM_TTL_SECONDS, RoomError } from "./rooms.ts";
+import {
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  MAX_PLAYERS,
+  ROOM_TTL_SECONDS,
+  RoomError,
+} from "./rooms.ts";
 
 /** Random numbers that make generateCode produce exactly these letters. */
 const letters = (code: string) =>
@@ -145,5 +152,54 @@ describe("joinRoom", () => {
       return item;
     };
     await expectRoomError(joinRoom(store, "g", "BAHA", NOW), "not_found");
+  });
+});
+
+describe("leaveRoom (S1-06)", () => {
+  async function withGuest() {
+    const store = new FakeStore();
+    await createRoom(store, "host", NOW, sequence(letters("BAHA")));
+    await joinRoom(store, "guest-1", "BAHA", NOW);
+    return store;
+  }
+
+  it("frees a guest's seat and deletes their items, and says where they were", async () => {
+    const store = await withGuest();
+    expect(await leaveRoom(store, "guest-1")).toEqual({ code: "BAHA", seat: 1 });
+    for (const key of ["ROOM#BAHA|SEAT#1", "ROOM#BAHA|CONN#guest-1", "CONN#guest-1|ROOM"]) {
+      expect(store.items.has(key), key).toBe(false);
+    }
+    expect(store.items.has("ROOM#BAHA|SEAT#0")).toBe(true); // the host is untouched
+  });
+
+  it("gives a guest who rejoins their old seat back (no ghost in seat 1, them in seat 2)", async () => {
+    const store = await withGuest();
+    await leaveRoom(store, "guest-1");
+    const again = await joinRoom(store, "guest-1-reloaded", "BAHA", NOW);
+    expect(again.seat).toBe(1);
+  });
+
+  it("ends the room when the host leaves: joining says so instead of seating anyone", async () => {
+    const store = await withGuest();
+    expect(await leaveRoom(store, "host")).toEqual({ code: "BAHA", seat: 0 });
+    expect(store.items.has("ROOM#BAHA|SEAT#0")).toBe(false);
+    expect(store.items.has("ROOM#BAHA|META")).toBe(true); // kept, so "ended" ≠ "not found"
+    await expectRoomError(joinRoom(store, "late", "BAHA", NOW), "ended");
+    expect(store.items.has("CONN#late|ROOM")).toBe(false);
+  });
+
+  it("does nothing for a connection that was never in a room", async () => {
+    const store = await withGuest();
+    const before = store.items.size;
+    expect(await leaveRoom(store, "stranger")).toBeUndefined();
+    expect(store.items.size).toBe(before);
+  });
+
+  it("never frees a seat that now belongs to someone else", async () => {
+    const store = await withGuest();
+    // A stale lookup: guest-1's CONN item still says seat 1, but seat 1 is now another player's.
+    store.items.set("ROOM#BAHA|SEAT#1", { PK: "ROOM#BAHA", SK: "SEAT#1", connId: "guest-2" });
+    await leaveRoom(store, "guest-1");
+    expect(store.items.get("ROOM#BAHA|SEAT#1")).toMatchObject({ connId: "guest-2" });
   });
 });

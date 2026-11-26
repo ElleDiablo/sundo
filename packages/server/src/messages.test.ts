@@ -25,6 +25,16 @@ describe("parseServerMessage", () => {
       reason: "full",
       message: "Full.",
     });
+    expect(parseServerMessage('{"type":"player_left","seat":2}')).toEqual({
+      type: "player_left",
+      seat: 2,
+    });
+    expect(parseServerMessage('{"type":"host_left"}')).toEqual({ type: "host_left" });
+    expect(parseServerMessage('{"type":"join_error","reason":"ended","message":"Over."}')).toEqual({
+      type: "join_error",
+      reason: "ended",
+      message: "Over.",
+    });
     expect(parseServerMessage('{"type":"error","message":"nope"}')).toEqual({
       type: "error",
       message: "nope",

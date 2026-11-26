@@ -39,6 +39,16 @@ describe("CachedStore", () => {
     expect(reads()).toBe(2);
   });
 
+  it("forgets an item this container deletes or overwrites (leaving a room, S1-06)", async () => {
+    const { inner, reads } = counting();
+    inner.items.set("CONN#c1|ROOM", { ...conn, room: "BAHO", seat: 1 });
+    const store = new CachedStore(inner, () => 0);
+    await store.get(conn);
+    await store.transact([{ kind: "delete", key: conn }]);
+    expect(await store.get(conn)).toBeUndefined();
+    expect(reads()).toBe(2);
+  });
+
   it("forgets items after the cache TTL", async () => {
     const { inner, reads } = counting();
     inner.items.set("CONN#c1|ROOM", { ...conn, room: "BAHO", seat: 1 });
