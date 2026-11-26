@@ -30,14 +30,15 @@ export const INPUT_MIN_GAP_MS = 100;
 /** Repeat unchanged keys once a second, in case a message was lost. */
 export const INPUT_KEEPALIVE_MS = 1000;
 
-/** Same keys AND same look (hat, shirt): anything different is a change worth sending. */
+/** Same keys (incl. E) AND same look (hat, shirt): anything different is a change worth sending. */
 const sameKeys = (a: PlayerInput, b: PlayerInput) =>
   a.up === b.up &&
   a.down === b.down &&
   a.left === b.left &&
   a.right === b.right &&
   a.hat === b.hat &&
-  a.shirt === b.shirt;
+  a.shirt === b.shirt &&
+  !!a.call === !!b.call; // `!!` so "not sent" and false count as the same
 
 export class InputSender {
   private seq = 0;
@@ -75,7 +76,7 @@ export class InputSender {
     this.sentAt.set(this.seq, nowMs);
     // If acks stop coming (host gone), don't let the map grow forever: forget the oldest.
     if (this.sentAt.size > 100) this.sentAt.delete(this.sentAt.keys().next().value!);
-    const { up, down, left, right, hat, shirt } = keys;
+    const { up, down, left, right, hat, shirt, call } = keys;
     const message: { -readonly [K in keyof InputFields]: InputFields[K] } = {
       seq: this.seq,
       up,
@@ -86,6 +87,7 @@ export class InputSender {
     // Only include the look when there is one (no `hat: undefined` on the wire).
     if (hat !== undefined) message.hat = hat;
     if (shirt !== undefined) message.shirt = shirt;
+    if (call) message.call = true; // only while E is held (S2-03)
     return message;
   }
 

@@ -107,6 +107,8 @@ setupLobby(
       onLook: (look) => world.setLook(look),
       onStart: () => world.startRound(),
     });
+    // S2-03: a child started following me.
+    world.events.on("escort", (name: string) => toast(`${name} is following you`));
     let shownPhase: string | undefined;
     world.listenToLobby((phase, seconds) => {
       wardrobe.show(phase, seconds);

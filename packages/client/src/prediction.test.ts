@@ -1,9 +1,10 @@
 /**
  * Tests for client-side prediction: the guest moves at once, re-bases on the host's snapshots,
- * replays only what the host hasn't applied yet, and fades small corrections out.
+ * replays only what the host hasn't applied yet, and fades small corrections out. Since S2-03 it
+ * also predicts calling a child with E and my line of followers.
  */
 import { describe, expect, it } from "vitest";
-import { mapFromRows, PLAYER_SPEED } from "@sundo/engine";
+import { ESCORT_SPEED, mapFromRows, PLAYER_SPEED } from "@sundo/engine";
 import { Predictor, SMOOTHING_MS, type TickInput } from "./prediction.ts";
 
 // An open 10 × 3 field with walls all round. Tile (1, 1) has its centre at (1500, 1500).
@@ -89,5 +90,41 @@ describe("Predictor", () => {
     const p = ready();
     p.tick(undefined);
     expect(p.position(1)).toEqual(start);
+  });
+
+  it("predicts calling a child with E, and walks me at escort speed with it (S2-03)", () => {
+    const p = new Predictor(map, "p1");
+    // The host's snapshot: me at the start, a lost child one tile to my right.
+    p.reconcile({
+      ...start,
+      ackSeq: 0,
+      ackTicks: 0,
+      kids: [{ id: "k0", x: 2500, y: 1500, following: null }],
+    });
+    p.tick({ seq: 1, keys: { ...none, call: true } });
+    expect(p.myKids(1).map((k) => k.id)).toEqual(["k0"]); // following me at once
+    p.tick({ seq: 2, keys: { ...none, left: true } });
+    expect(p.position(1)!.x).toBe(start.x - ESCORT_SPEED); // already slower: leading a child
+    p.reconcile({
+      x: 5500,
+      y: 1500,
+      ackSeq: 2,
+      ackTicks: 1,
+      kids: [{ id: "k0", x: 4700, y: 1500, following: "p1" }],
+    });
+    p.tick({ seq: 3, keys: right });
+    expect(p.position(1)!.x).toBe(5500 + ESCORT_SPEED); // slower while leading
+  });
+
+  it("leaves children who follow someone else where the snapshot has them", () => {
+    const p = new Predictor(map, "p1");
+    p.reconcile({
+      ...start,
+      ackSeq: 0,
+      ackTicks: 0,
+      kids: [{ id: "k0", x: 2500, y: 1500, following: "p2" }],
+    });
+    p.tick({ seq: 1, keys: { ...none, call: true } });
+    expect(p.myKids(1)).toEqual([]);
   });
 });
