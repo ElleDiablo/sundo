@@ -30,7 +30,7 @@ export const INPUT_MIN_GAP_MS = 100;
 /** Repeat unchanged keys once a second, in case a message was lost. */
 export const INPUT_KEEPALIVE_MS = 1000;
 
-/** Same keys (incl. E) AND same look (hat, shirt): anything different is a change worth sending. */
+/** Same keys (incl. E and 1–4) AND same look (hat, shirt): anything different is worth sending. */
 const sameKeys = (a: PlayerInput, b: PlayerInput) =>
   a.up === b.up &&
   a.down === b.down &&
@@ -38,7 +38,8 @@ const sameKeys = (a: PlayerInput, b: PlayerInput) =>
   a.right === b.right &&
   a.hat === b.hat &&
   a.shirt === b.shirt &&
-  !!a.call === !!b.call; // `!!` so "not sent" and false count as the same
+  !!a.call === !!b.call && // `!!` so "not sent" and false count as the same
+  a.emote === b.emote; // S2-06: pressing (or letting go of) 1–4 is a change
 
 export class InputSender {
   private seq = 0;

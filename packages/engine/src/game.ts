@@ -79,6 +79,15 @@ export const KID_SPEED = 150;
 // behind, so the player has to step into the doorway (or right up to it) for this to happen.
 export const HOME_RANGE = 1000;
 
+// Emotes (S2-06, ADR-0005: no free-text chat). Four of them; the client decides the words
+// (packages/client/src/emotes.ts: 0 = "Dito!", 1 = "Takbo!", 2 = "Tulong!", 3 = "Salamat!").
+export const EMOTE_COUNT = 4;
+// An emote shows over the player for 2 s (40 ticks)...
+export const EMOTE_TICKS = 40;
+// ...and a player can start a new one at most once a second (20 ticks), so holding a key or
+// pressing all four quickly can't flood everyone's screen.
+export const EMOTE_COOLDOWN_TICKS = 20;
+
 // The dawn timer (S2-05, GDD §2): a round lasts 6 minutes = 360 s × 20 ticks = 7200 ticks.
 export const ROUND_TICKS = 6 * 60 * 20;
 // The team score (GDD §2): children saved × 100 + seconds left × 2 − times lost × 25.
@@ -107,6 +116,7 @@ export interface PlayerInput extends MoveInput {
   readonly hat?: number; // 0 … HAT_COUNT - 1
   readonly shirt?: number; // 0 … SHIRT_COUNT - 1
   readonly call?: boolean; // E held: call the nearest lost child in range (S2-03)
+  readonly emote?: number; // 1–4 pressed: show emote 0 … EMOTE_COUNT - 1 (S2-06)
 }
 
 // One player's state. More fields arrive in later sprints (flashlight, escorting, baliktad).
@@ -116,6 +126,8 @@ export interface PlayerState {
   readonly y: number; // centre of the box, top↕bottom, in units (always a whole number)
   readonly hat: number; // which hat they wear (S2-01); only changes in the lobby
   readonly shirt: number; // which shirt colour (S2-01); only changes in the lobby
+  readonly emote: number | null; // the emote showing over them (S2-06), or null for none
+  readonly emoteAt: number | null; // the tick their last emote started, for its 2 s and the 1 s limit
 }
 
 // A lost child (S2-02). Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
@@ -185,6 +197,8 @@ export type GameEvent =
   | { readonly type: "round_started" }
   // A player called a lost child and it now follows them (S2-03): for a sound, telemetry later.
   | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
+  // A player started an emote (S2-06): for telemetry later (which emotes help teams win?).
+  | { readonly type: "emote"; readonly player: string; readonly emote: number }
   // A child reached their own house and went inside (S2-04). `player` is who led them there.
   | { readonly type: "kid_home"; readonly kid: string; readonly player: string }
   // The round ended (S2-05): every child is home, or dawn came first. `score` is the team score.
@@ -245,7 +259,8 @@ export function createGame(
     }
     // Tile → units: tile 3 starts at 3000, and + 500 (half a tile) puts the player at its centre.
     const look = { hat: validHat(hat) ?? 0, shirt: validShirt(shirt) ?? 0 };
-    return { id, x: tileX * UNITS_PER_TILE + 500, y: tileY * UNITS_PER_TILE + 500, ...look };
+    const x = tileX * UNITS_PER_TILE + 500;
+    return { id, x, y: tileY * UNITS_PER_TILE + 500, ...look, emote: null, emoteAt: null };
   });
   // `{ tick: 0, map, players }` is shorthand for { tick: 0, map: map, players: players }.
   // Every game starts in the lobby, with no countdown running and no children out yet.
@@ -362,6 +377,8 @@ export function addPlayer(state: GameState, spawn: PlayerSpawn): GameState {
       y: ty * UNITS_PER_TILE + 500,
       hat: validHat(spawn.hat) ?? 0,
       shirt: validShirt(spawn.shirt) ?? 0,
+      emote: null, // S2-06: no emote showing yet
+      emoteAt: null,
     };
     // `[...a, b]` is a new array: every old player, then the new one at the end.
     return { ...state, players: [...state.players, player] };
@@ -386,17 +403,21 @@ export function removePlayer(state: GameState, id: string): GameState {
 // That's what lets tests compare "before" and "after", and lets a round be replayed exactly.
 export function step(state: GameState, inputs: Inputs): StepResult {
   const inLobby = state.phase === "lobby";
+  const tick = state.tick + 1; // the tick this step produces
+  const events: GameEvent[] = [];
   // Who is leading children right now: they walk slower (S2-03).
   const escorting = new Set(state.kids.flatMap((k) => (k.following ? [k.following] : [])));
   // Build the new list of players, one at a time, in the same order as before.
   const players = state.players.map((player) => {
     // Look up this player's keys. This is `undefined` if no input arrived for them this tick.
     const input = inputs[player.id];
-    // `a ? b : c` means "if a then b else c". No input → the same player, standing still.
-    if (!input) return player;
+    // No input → the same player, standing still (but an old emote still runs out: S2-06).
+    if (!input) return updateEmote(player, undefined, tick, events);
     const moved = movePlayer(state.map, player, input, escorting.has(player.id));
     // Hats and shirts can only change in the lobby. Out-of-range choices are ignored.
-    return inLobby ? changeLook(moved, input) : moved;
+    const looked = inLobby ? changeLook(moved, input) : moved;
+    // Emotes work in every phase: the lobby, the round and the result screen (S2-06).
+    return updateEmote(looked, input, tick, events);
   });
 
   // The children: anyone holding E calls the nearest lost child in range, then every following
@@ -404,7 +425,6 @@ export function step(state: GameState, inputs: Inputs): StepResult {
   // Once the round has ended (S2-05) nobody can call a child or take one home any more; players
   // can still walk about while the result screen shows.
   const inRound = state.phase === "round";
-  const events: GameEvent[] = [];
   const called = inRound ? callKids(state.kids, players, inputs, events) : state.kids;
   const moved = moveKids(state.map, called, players);
   // Then any following child now standing at their own doorway goes inside (S2-04).
@@ -413,7 +433,7 @@ export function step(state: GameState, inputs: Inputs): StepResult {
     : { kids: moved, home: state.home };
 
   // New state: tick goes up by one; the map is shared (it's read-only, so sharing is safe).
-  const next: GameState = { ...state, tick: state.tick + 1, players, kids, home };
+  const next: GameState = { ...state, tick, players, kids, home };
 
   // The round: the dawn timer counts down, and the round ends (S2-05). Every child home wins,
   // checked first, so bringing the last one in on the very last tick still counts as a win.
@@ -595,6 +615,31 @@ function bringKidsHome(
     kids: kids.filter((k) => !arrived.includes(k)),
     home: [...home, ...arrived.map((k) => k.id)],
   };
+}
+
+// ─── Emotes (private helper, S2-06) ──────────────────────────────────────────────────────────
+
+// Starts the emote in `input` if it's valid and the player's last one started at least
+// EMOTE_COOLDOWN_TICKS ago (adding an "emote" event), and clears an emote that has shown for
+// EMOTE_TICKS. Returns the same object when nothing changes. A player holding a key keeps the
+// emote in their input, so it repeats once a second while held, never faster.
+function updateEmote(
+  player: PlayerState,
+  input: PlayerInput | undefined,
+  tick: number,
+  events: GameEvent[],
+): PlayerState {
+  const emote = input?.emote;
+  const valid = Number.isInteger(emote) && emote! >= 0 && emote! < EMOTE_COUNT;
+  const rested = player.emoteAt === null || tick - player.emoteAt >= EMOTE_COOLDOWN_TICKS;
+  if (valid && rested) {
+    events.push({ type: "emote", player: player.id, emote: emote! });
+    return { ...player, emote: emote!, emoteAt: tick };
+  }
+  if (player.emote !== null && player.emoteAt !== null && tick - player.emoteAt >= EMOTE_TICKS) {
+    return { ...player, emote: null }; // shown for 2 s: gone (emoteAt stays, for the limit)
+  }
+  return player;
 }
 
 // ─── Looks (private helpers) ─────────────────────────────────────────────────────────────────

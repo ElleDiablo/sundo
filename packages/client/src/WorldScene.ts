@@ -40,6 +40,10 @@
  * every browser shows the same timer and works out the same score (engine teamScore). The host's
  * "Back to the plaza" calls returnToLobby(), which puts everyone back at the spawn for another round.
  *
+ * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
+ * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
+ * so everyone draws the same speech bubble ("Dito!") over my tanod.
+ *
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
@@ -77,6 +81,7 @@ import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
 import { KID_NAMES, kidRow } from "./kids.ts";
+import { EMOTE_HOLD_MS, emoteText } from "./emotes.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { Predictor } from "./prediction.ts";
 
@@ -127,9 +132,12 @@ const DEPTH = { ground: 0, decor: 1, objects: 2, player: 10, above: 20, night: 3
 const WALK_HOLD_MS = 120;
 
 type Keys = Record<
-  "W" | "A" | "S" | "D" | "UP" | "DOWN" | "LEFT" | "RIGHT" | "E",
+  "W" | "A" | "S" | "D" | "UP" | "DOWN" | "LEFT" | "RIGHT" | "E" | "ONE" | "TWO" | "THREE" | "FOUR",
   Phaser.Input.Keyboard.Key
 >;
+
+/** A player as draw() takes it: from a snapshot (emote missing = none) or the engine (null = none). */
+type DrawnPlayer = SnapshotPlayer | (Omit<SnapshotPlayer, "emote"> & { emote: number | null });
 
 export class WorldScene extends Phaser.Scene {
   private state!: GameState; // the engine's current state
@@ -147,6 +155,10 @@ export class WorldScene extends Phaser.Scene {
   private localId = playerId(0);
   /** One sprite per player id. */
   private sprites = new Map<string, Phaser.GameObjects.Sprite>();
+  /** The speech bubble over each player (S2-06), by player id; hidden while they have no emote. */
+  private bubbles = new Map<string, Phaser.GameObjects.Text>();
+  /** The emote key I last pressed (0–3) and until when it stays in my input (EMOTE_HOLD_MS). */
+  private emoteKey: { emote: number; until: number } | undefined;
   /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
   private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
   /** "Tala · E" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
@@ -318,7 +330,14 @@ export class WorldScene extends Phaser.Scene {
     // 6. Keyboard: WASD and the arrow keys.
     const keyboard = this.input.keyboard;
     if (!keyboard) throw new Error("no keyboard input available");
-    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E") as Keys; // E: call a child (S2-03)
+    // E: call a child (S2-03). ONE–FOUR: the number keys 1–4 above the letters, emotes (S2-06).
+    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR") as Keys;
+    // A press of 1–4 is remembered for EMOTE_HOLD_MS, so even a very quick tap reaches the engine.
+    (["ONE", "TWO", "THREE", "FOUR"] as const).forEach((name, emote) =>
+      this.keys[name].on("down", () => {
+        if (this.controlsOn) this.emoteKey = { emote, until: performance.now() + EMOTE_HOLD_MS };
+      }),
+    );
 
     // 7. Typing in a text box (the room code) must not walk the tanod. Phaser "captures" these
     //    keys for the whole page: it cancels the browser's normal handling, so W, A, S and D would
@@ -539,7 +558,10 @@ export class WorldScene extends Phaser.Scene {
     const { tick, phase, countdown } = this.state;
     const snapshot: SnapshotFields = {
       tick,
-      players: this.state.players.map(({ id, x, y, hat, shirt }) => ({ id, x, y, hat, shirt })),
+      // The emote only while one is showing (S2-06), like a child's `following`.
+      players: this.state.players.map(({ id, x, y, hat, shirt, emote }) =>
+        emote === null ? { id, x, y, hat, shirt } : { id, x, y, hat, shirt, emote },
+      ),
       acks,
       ackTicks,
       phase, // S2-01: lobby or round, so guests can show the picker or the brownout
@@ -580,7 +602,10 @@ export class WorldScene extends Phaser.Scene {
       guest.buffer.latest?.phase === "round" && old
         ? { hat: old.hat ?? 0, shirt: old.shirt ?? defaultShirt(guest.seat) }
         : this.look;
-    const me = mine ? { id: this.localId, ...mine, hat: look.hat, shirt: look.shirt } : old;
+    // My speech bubble comes from the snapshot (the host decides it, ~100 ms after the key).
+    const me = mine
+      ? { id: this.localId, ...mine, hat: look.hat, shirt: look.shirt, emote: old?.emote ?? null }
+      : old;
     this.draw([...players.filter((p) => p.id !== this.localId), ...(me ? [me] : [])], now);
     // Children: the snapshot's, except mine, which come from my prediction (instant, S2-03).
     const predicted = guest.predictor.myKids(alpha);
@@ -602,7 +627,7 @@ export class WorldScene extends Phaser.Scene {
     const look = this.look;
     if (!this.controlsOn) return { up: false, down: false, left: false, right: false, ...look };
     const k = this.keys;
-    return {
+    const keys = {
       up: k.W.isDown || k.UP.isDown,
       down: k.S.isDown || k.DOWN.isDown,
       left: k.A.isDown || k.LEFT.isDown,
@@ -610,6 +635,14 @@ export class WorldScene extends Phaser.Scene {
       call: k.E.isDown, // S2-03: call the nearest lost child
       ...look,
     };
+    // S2-06: the emote key, while it's held or for EMOTE_HOLD_MS after it was pressed.
+    const held = this.emoteKey;
+    const numbers = [k.ONE, k.TWO, k.THREE, k.FOUR];
+    if (held && (performance.now() < held.until || numbers[held.emote]?.isDown)) {
+      return { ...keys, emote: held.emote };
+    }
+    this.emoteKey = undefined;
+    return keys;
   }
 
   /**
@@ -677,13 +710,15 @@ export class WorldScene extends Phaser.Scene {
    * sprites for newcomers, removes sprites of players who are gone, and walks or idles each one.
    * Both modes end here, so host and guests draw players exactly the same way.
    */
-  private draw(players: readonly SnapshotPlayer[], now: number): void {
+  private draw(players: readonly DrawnPlayer[], now: number): void {
     const ids = new Set(players.map((p) => p.id));
     for (const [id, sprite] of this.sprites) {
       if (ids.has(id)) continue;
       sprite.destroy();
       this.sprites.delete(id);
       this.motion.delete(id);
+      this.bubbles.get(id)?.destroy();
+      this.bubbles.delete(id);
     }
 
     for (const p of players) {
@@ -698,7 +733,36 @@ export class WorldScene extends Phaser.Scene {
       sprite.setDepth(DEPTH.player + y / 10_000);
 
       this.animate(sprite, p, walkKey(row), row * WALK_FRAMES, now);
+      this.drawBubble(p.id, emoteText(p.emote), Math.round(x), Math.round(y) - 30);
     }
+  }
+
+  /**
+   * The speech bubble over a player (S2-06): `text` at (x, y) in world pixels (just above their
+   * head), or hidden when `text` is undefined. Drawn above the night tint, like the call hint, so
+   * it can be read in the dark.
+   */
+  private drawBubble(id: string, text: string | undefined, x: number, y: number): void {
+    let bubble = this.bubbles.get(id);
+    if (!text) {
+      bubble?.setVisible(false);
+      return;
+    }
+    if (!bubble) {
+      bubble = this.add
+        .text(0, 0, "", {
+          fontFamily: "monospace",
+          fontSize: "8px",
+          color: "#0b0e16",
+          backgroundColor: "#ddd7c6",
+          padding: { x: 3, y: 2 },
+          resolution: 4, // sharper text when the canvas is scaled up
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(DEPTH.glow + 2);
+      this.bubbles.set(id, bubble);
+    }
+    bubble.setText(text).setPosition(x, y).setVisible(true);
   }
 
   /**

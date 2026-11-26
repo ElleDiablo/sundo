@@ -158,7 +158,10 @@ export class Predictor {
       home: [],
       dawn: ROUND_TICKS,
       timesLost: 0,
-      players: [{ id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0 }],
+      // No emote: my bubble comes from the snapshot, not the prediction (S2-06).
+      players: [
+        { id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0, emote: null, emoteAt: null },
+      ],
     };
     let previous = state;
     for (const { keys } of this.history) {
