@@ -44,6 +44,8 @@ export interface TiledObject {
   readonly x: number; // in pixels
   readonly y: number;
   readonly point?: boolean;
+  readonly width?: number; // in pixels (rectangles; 0 for points)
+  readonly height?: number;
 }
 
 export interface TiledTileset {
@@ -134,5 +136,28 @@ export function findTiledPoints(
     .map((o) => ({
       tileX: Math.floor(o.x / tiled.tilewidth),
       tileY: Math.floor(o.y / tiled.tileheight),
+    }));
+}
+
+/**
+ * Finds every RECTANGLE object with this name in an object layer, as whole tiles (S3-01: the
+ * safe zones, rectangles named "safe" in the "zones" layer). A rectangle from (x, y) px, w × h px
+ * becomes the tiles it covers; draw them on the tile grid in Tiled (View ▸ Snapping).
+ */
+export function findTiledRects(
+  tiled: TiledMap,
+  layerName: string,
+  objectName: string,
+): { tileX: number; tileY: number; width: number; height: number }[] {
+  const layer = tiled.layers.find((l) => l.type === "objectgroup" && l.name === layerName);
+  if (!layer || layer.type !== "objectgroup")
+    throw new RangeError(`no object layer named "${layerName}"`);
+  return layer.objects
+    .filter((o) => o.name === objectName && !o.point)
+    .map((o) => ({
+      tileX: Math.floor(o.x / tiled.tilewidth),
+      tileY: Math.floor(o.y / tiled.tileheight),
+      width: Math.round((o.width ?? 0) / tiled.tilewidth),
+      height: Math.round((o.height ?? 0) / tiled.tileheight),
     }));
 }

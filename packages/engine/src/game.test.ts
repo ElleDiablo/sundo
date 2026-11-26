@@ -5,12 +5,15 @@
  * escorting them (S2-03): calling with E, the trailing line, escort speed, and taking them home
  * (S2-04): a following child at their own doorway goes inside, and the end of a round (S2-05):
  * the dawn timer, winning and losing, the team score and going back to the lobby; and emotes
- * (S2-06): shown for 2 s, at most one a second.
+ * (S2-06): shown for 2 s, at most one a second; and the flashlight (S3-01): facing, battery,
+ * safe zones.
  * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
 import {
   addPlayer,
+  BATTERY_MAX,
+  BATTERY_RECHARGE,
   createGame,
   CALL_RANGE,
   EMOTE_COOLDOWN_TICKS,
@@ -81,6 +84,10 @@ describe("createGame", () => {
       shirt: 0,
       emote: null,
       emoteAt: null,
+      faceX: 0,
+      faceY: 1,
+      light: false,
+      battery: BATTERY_MAX,
     });
   });
 
@@ -100,6 +107,10 @@ describe("addPlayer", () => {
       shirt: 0,
       emote: null,
       emoteAt: null,
+      faceX: 0,
+      faceY: 1,
+      light: false,
+      battery: BATTERY_MAX,
     });
   });
 
@@ -796,5 +807,58 @@ describe("emotes (S2-06)", () => {
   it("doesn't stop the player walking", () => {
     const state = step(start(), { p0: { ...NONE, right: true, emote: 0 } }).state;
     expect(player(state, "p0").x).toBe(5500 + PLAYER_SPEED);
+  });
+});
+
+describe("the flashlight and safe zones (S3-01)", () => {
+  // A safe zone over the room's left half (columns 1–5); p0 starts at (8, 5), outside it.
+  const safeZones = [{ tileX: 1, tileY: 1, width: 5, height: 10 }];
+  const round = () =>
+    startRound(createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 5 }], { safeZones }));
+  const LIGHT = { p0: { ...NONE, light: true } };
+
+  it("faces the way the player last walked, even after stopping", () => {
+    let state = step(round(), { p0: hold({ left: true, up: true }) }).state;
+    expect(player(state, "p0")).toMatchObject({ faceX: -1, faceY: -1 });
+    state = step(state, {}).state;
+    expect(player(state, "p0")).toMatchObject({ faceX: -1, faceY: -1 });
+  });
+
+  it("turns the light on while Space is held, and drains one tick of battery per tick", () => {
+    const state = run(round(), LIGHT, 20);
+    expect(player(state, "p0")).toMatchObject({ light: true, battery: BATTERY_MAX - 20 });
+    expect(player(step(state, {}).state, "p0").light).toBe(false);
+  });
+
+  it("runs out after 90 s of light, then stays off", () => {
+    const start = round();
+    const empty = { ...start, players: start.players.map((p) => ({ ...p, battery: 1 })) };
+    const state = run(empty, LIGHT, 3);
+    expect(player(state, "p0")).toMatchObject({ light: false, battery: 0 });
+    expect(BATTERY_MAX / TICKS_PER_SECOND).toBe(90);
+  });
+
+  it("recharges inside a safe zone, even with the light on, up to full", () => {
+    const start = round();
+    const inside = {
+      ...start,
+      players: start.players.map((p) => ({ ...p, x: 3500, battery: 100 })),
+    };
+    expect(player(step(inside, LIGHT).state, "p0").battery).toBe(100 + BATTERY_RECHARGE);
+    expect(player(run(inside, {}, 400), "p0").battery).toBe(BATTERY_MAX);
+  });
+
+  it("doesn't drain in the lobby", () => {
+    const lobby = createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 5 }], { safeZones });
+    expect(player(run(lobby, LIGHT, 10), "p0")).toMatchObject({
+      light: true,
+      battery: BATTERY_MAX,
+    });
+  });
+
+  it("gives everyone a full battery when a round starts", () => {
+    const lobby = createGame(ROOM, [{ id: "p0", tileX: 8, tileY: 5 }]);
+    const used = { ...lobby, players: lobby.players.map((p) => ({ ...p, battery: 5 })) };
+    expect(player(startRound(used), "p0").battery).toBe(BATTERY_MAX);
   });
 });

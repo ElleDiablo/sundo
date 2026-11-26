@@ -20,6 +20,7 @@
 
 // Bring in helpers from map.ts. `type TileMap` imports only the type (erased when the code runs).
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
+import { inZone, type Zone } from "./light.ts";
 import { createRng } from "./rng.ts";
 
 // ─── Tuning constants ────────────────────────────────────────────────────────────────────────
@@ -79,6 +80,12 @@ export const KID_SPEED = 150;
 // behind, so the player has to step into the doorway (or right up to it) for this to happen.
 export const HOME_RANGE = 1000;
 
+// The flashlight (S3-01, GDD §5): 90 s of light in total = 1800 ticks of battery. It drains one
+// tick per tick while on during a round, and recharges 6 ticks per tick inside a safe zone (empty
+// to full in 15 s).
+export const BATTERY_MAX = 90 * 20;
+export const BATTERY_RECHARGE = 6;
+
 // Emotes (S2-06, ADR-0005: no free-text chat). Four of them; the client decides the words
 // (packages/client/src/emotes.ts: 0 = "Dito!", 1 = "Takbo!", 2 = "Tulong!", 3 = "Salamat!").
 export const EMOTE_COUNT = 4;
@@ -117,6 +124,7 @@ export interface PlayerInput extends MoveInput {
   readonly shirt?: number; // 0 … SHIRT_COUNT - 1
   readonly call?: boolean; // E held: call the nearest lost child in range (S2-03)
   readonly emote?: number; // 1–4 pressed: show emote 0 … EMOTE_COUNT - 1 (S2-06)
+  readonly light?: boolean; // Space held: flashlight on, if the battery has any left (S3-01)
 }
 
 // One player's state. More fields arrive in later sprints (flashlight, escorting, baliktad).
@@ -128,6 +136,11 @@ export interface PlayerState {
   readonly shirt: number; // which shirt colour (S2-01); only changes in the lobby
   readonly emote: number | null; // the emote showing over them (S2-06), or null for none
   readonly emoteAt: number | null; // the tick their last emote started, for its 2 s and the 1 s limit
+  // The way they last walked (S3-01): each −1, 0 or 1, never both 0. The flashlight points this way.
+  readonly faceX: number;
+  readonly faceY: number;
+  readonly light: boolean; // flashlight on this tick (Space held and battery left)
+  readonly battery: number; // ticks of light left, 0 … BATTERY_MAX
 }
 
 // A lost child (S2-02). Ids are "k0"…"k4"; the client picks each one's sprite and name by it.
@@ -170,6 +183,9 @@ export interface GameState {
   // The lost children: none in the lobby, KID_COUNT once the round starts (S2-02). A child who
   // gets home leaves this list (S2-04).
   readonly kids: readonly KidState[];
+  // Lit, safe places (S3-01): the kapilya plaza and the sari-sari store. Batteries recharge in
+  // them, and the tikbalang can't enter or see into them (S3-02). Fixed.
+  readonly safeZones: readonly Zone[];
   // Each house's doorway, in the map's order: child "k<n>" lives at homes[n] (S2-04). Fixed.
   readonly homes: readonly Spot[];
   // The ids of the children who are home this round, in the order they got there (S2-04).
@@ -225,6 +241,7 @@ export interface GameOptions {
   readonly seed?: number; // starts the random generator (the host picks one per game)
   readonly kidSpots?: readonly Spot[]; // the map's hiding spots
   readonly homes?: readonly Spot[]; // the map's house doorways, child k0's first (S2-04)
+  readonly safeZones?: readonly Zone[]; // the map's safe zones (S3-01)
 }
 
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
@@ -260,7 +277,7 @@ export function createGame(
     // Tile → units: tile 3 starts at 3000, and + 500 (half a tile) puts the player at its centre.
     const look = { hat: validHat(hat) ?? 0, shirt: validShirt(shirt) ?? 0 };
     const x = tileX * UNITS_PER_TILE + 500;
-    return { id, x, y: tileY * UNITS_PER_TILE + 500, ...look, emote: null, emoteAt: null };
+    return { id, x, y: tileY * UNITS_PER_TILE + 500, ...look, ...NEW_PLAYER };
   });
   // `{ tick: 0, map, players }` is shorthand for { tick: 0, map: map, players: players }.
   // Every game starts in the lobby, with no countdown running and no children out yet.
@@ -276,6 +293,7 @@ export function createGame(
     kids: [],
     homes,
     home: [],
+    safeZones: options.safeZones ?? [],
     dawn: 0,
     timesLost: 0,
     players,
@@ -288,6 +306,17 @@ export function kidHome(homes: readonly Spot[], kidId: string): Spot | undefined
   const n = Number(kidId.slice(1)); // "k2" → 2; anything that isn't a number gives NaN
   return Number.isInteger(n) && n >= 0 ? homes[n] : undefined;
 }
+
+// The parts of a new player that don't depend on where they spawn or what they wear: no emote
+// (S2-06), facing down (towards the viewer), flashlight off with a full battery (S3-01).
+const NEW_PLAYER = {
+  emote: null,
+  emoteAt: null,
+  faceX: 0,
+  faceY: 1,
+  light: false,
+  battery: BATTERY_MAX,
+} as const;
 
 // Whole seconds left on the dawn timer, at 20 ticks a second (index.ts TICKS_PER_SECOND; not
 // imported from there, which would make the two files import each other): 7200 ticks → 360,
@@ -377,8 +406,7 @@ export function addPlayer(state: GameState, spawn: PlayerSpawn): GameState {
       y: ty * UNITS_PER_TILE + 500,
       hat: validHat(spawn.hat) ?? 0,
       shirt: validShirt(spawn.shirt) ?? 0,
-      emote: null, // S2-06: no emote showing yet
-      emoteAt: null,
+      ...NEW_PLAYER, // no emote, facing down, flashlight off, full battery
     };
     // `[...a, b]` is a new array: every old player, then the new one at the end.
     return { ...state, players: [...state.players, player] };
@@ -411,13 +439,19 @@ export function step(state: GameState, inputs: Inputs): StepResult {
   const players = state.players.map((player) => {
     // Look up this player's keys. This is `undefined` if no input arrived for them this tick.
     const input = inputs[player.id];
-    // No input → the same player, standing still (but an old emote still runs out: S2-06).
-    if (!input) return updateEmote(player, undefined, tick, events);
+    // No input → standing still with the light off (an old emote still runs out: S2-06, and the
+    // battery still recharges in a safe zone: S3-01).
+    if (!input) {
+      const still = updateLight(player, undefined, state);
+      return updateEmote(still, undefined, tick, events);
+    }
     const moved = movePlayer(state.map, player, input, escorting.has(player.id));
     // Hats and shirts can only change in the lobby. Out-of-range choices are ignored.
     const looked = inLobby ? changeLook(moved, input) : moved;
+    // The flashlight and battery (S3-01).
+    const lit = updateLight(looked, input, state);
     // Emotes work in every phase: the lobby, the round and the result screen (S2-06).
-    return updateEmote(looked, input, tick, events);
+    return updateEmote(lit, input, tick, events);
   });
 
   // The children: anyone holding E calls the nearest lost child in range, then every following
@@ -483,6 +517,7 @@ function beginRound(state: GameState): GameState {
     dawn: ROUND_TICKS, // S2-05: 6 minutes to dawn
     timesLost: 0,
     rngState,
+    players: state.players.map((p) => ({ ...p, battery: BATTERY_MAX })), // S3-01: fresh batteries
   };
 }
 
@@ -615,6 +650,37 @@ function bringKidsHome(
     kids: kids.filter((k) => !arrived.includes(k)),
     home: [...home, ...arrived.map((k) => k.id)],
   };
+}
+
+// ─── The flashlight (private helper, S3-01) ──────────────────────────────────────────────────
+
+// Updates which way a player faces, whether their flashlight is on and their battery. Facing
+// follows the keys held (even into a wall: you can point at it). The light is on while Space is
+// held and there's battery; during a round it drains one tick per tick, except inside a safe zone,
+// where the battery recharges instead. Returns the same object when nothing changes.
+function updateLight(
+  player: PlayerState,
+  input: PlayerInput | undefined,
+  state: GameState,
+): PlayerState {
+  const dirX = input ? Number(input.right) - Number(input.left) : 0;
+  const dirY = input ? Number(input.down) - Number(input.up) : 0;
+  const turned = dirX !== 0 || dirY !== 0;
+  const faceX = turned ? dirX : player.faceX;
+  const faceY = turned ? dirY : player.faceY;
+  const light = !!input?.light && player.battery > 0;
+  let battery = player.battery;
+  if (inZone(state.safeZones, player.x, player.y)) {
+    battery = Math.min(BATTERY_MAX, battery + BATTERY_RECHARGE);
+  } else if (light && state.phase === "round") {
+    battery -= 1;
+  }
+  const same =
+    faceX === player.faceX &&
+    faceY === player.faceY &&
+    light === player.light &&
+    battery === player.battery;
+  return same ? player : { ...player, faceX, faceY, light, battery };
 }
 
 // ─── Emotes (private helper, S2-06) ──────────────────────────────────────────────────────────

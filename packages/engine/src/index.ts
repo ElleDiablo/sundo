@@ -6,6 +6,16 @@
  * The same inputs always give the same game, in the browser, in tests and in the simulator.
  */
 
+// Light and sight (S3-01): safe zones, the flashlight cone, line of sight past walls.
+export {
+  inCone,
+  inZone,
+  LIGHT_COS2,
+  LIGHT_RANGE,
+  lineOfSight,
+  tileInZone,
+  type Zone,
+} from "./light.ts";
 // Seeded random numbers (the only randomness the engine may use).
 export { createRng, type Rng } from "./rng.ts";
 // The tile map: which tiles are walls, and unit/tile conversions.
@@ -14,6 +24,7 @@ export { isWall, mapFromRows, tileOf, UNITS_PER_TILE, type TileMap } from "./map
 export {
   findTiledPoint,
   findTiledPoints,
+  findTiledRects,
   mapFromTiled,
   TILE_SIZE_PX,
   type TiledLayer,
@@ -25,6 +36,8 @@ export {
 // and the end of a round (S2-05): teamScore, secondsLeft, returnToLobby.
 export {
   addPlayer,
+  BATTERY_MAX,
+  BATTERY_RECHARGE,
   CALL_RANGE,
   createGame,
   EMOTE_COOLDOWN_TICKS,
