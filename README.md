@@ -20,7 +20,8 @@ sends keys and draws the host's snapshots 20 times a second.*
 the same link, press **Join with code** and type it. Walk with WASD or the arrow keys, pick a hat
 and a shirt in the kapilya plaza, and the host presses **Start round**. Find the lost children and
 hold **Space** for your flashlight (it recharges in the plaza and at the store) and
-press **E** next to one so they follow you (up to two at a time). A label shows which house is
+press **E** next to one so they follow you (up to two at a time). Watch out for the tikbalang: in the
+dark you may only see its eye. A label shows which house is
 theirs; walk them to its doorway and they go inside. Bring all five home before the 6-minute
 dawn timer runs out; the result screen shows the team score, and the host can start another
 round. Press **1–4** to call out "Dito!", "Takbo!", "Tulong!" or "Salamat!" to the team.

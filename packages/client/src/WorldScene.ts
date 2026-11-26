@@ -45,6 +45,11 @@
  * around each tanod and flashlight cones (Space; they point the way each tanod last walked). The
  * engine runs the battery; snapshots carry facing, light and battery; the HUD shows my battery.
  *
+ * The tikbalang (S3-02): the host's engine runs it (tikbalang.ts in the engine); snapshots carry
+ * where it is, its mode and facing, and guests slide it between snapshots like a player. It's drawn
+ * among the players (so the darkness hides it unless it's lit), and while it stalks or chases, its
+ * eye is drawn again above the darkness: a glint in the dark is all you see coming.
+ *
  * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
  * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
  * so everyone draws the same speech bubble ("Dito!") over my tanod.
@@ -84,7 +89,12 @@ import {
   type TiledMap,
   type TileMap,
 } from "@sundo/engine";
-import type { InputFields, SnapshotFields, SnapshotPlayer } from "@sundo/server/messages";
+import type {
+  InputFields,
+  SnapshotFields,
+  SnapshotPlayer,
+  SnapshotTikbalang,
+} from "@sundo/server/messages";
 import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
@@ -219,6 +229,9 @@ export class WorldScene extends Phaser.Scene {
   private bubbles = new Map<string, Phaser.GameObjects.Text>();
   /** The emote key I last pressed (0–3) and until when it stays in my input (EMOTE_HOLD_MS). */
   private emoteKey: { emote: number; until: number } | undefined;
+  /** The tikbalang (S3-02) and its eye glint (above the darkness); hidden outside the round. */
+  private tikSprite!: Phaser.GameObjects.Sprite;
+  private tikEye!: Phaser.GameObjects.Sprite;
   /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
   private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
   /** "Tala [E]" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
@@ -298,6 +311,10 @@ export class WorldScene extends Phaser.Scene {
     this.load.image("cone", "assets/sprites/cone.png");
     // The lost children (S2-02): same frame size, one row per child (kids.ts), 4 walk frames.
     this.load.spritesheet("kids", "assets/sprites/kids.png", { frameWidth: 16, frameHeight: 28 });
+    // The tikbalang (S3-02): 24 × 32 frames, 4-frame walk; and the same frames with only its eye.
+    const tikFrames = { frameWidth: 24, frameHeight: 32 };
+    this.load.spritesheet("tikbalang", "assets/sprites/tikbalang.png", tikFrames);
+    this.load.spritesheet("tikbalang-eye", "assets/sprites/tikbalang-eye.png", tikFrames);
   }
 
   create(): void {
@@ -325,6 +342,10 @@ export class WorldScene extends Phaser.Scene {
       kidSpots,
       homes: this.homes,
       safeZones: this.safeZones,
+      // S3-02: the tikbalang's spawn, patrol and ambush points.
+      tikSpawn: findTiledPoint(tiled, "spawns", "tikbalang"),
+      patrol: findTiledPoints(tiled, "spawns", "patrol"),
+      ambush: findTiledPoints(tiled, "spawns", "ambush"),
     });
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
@@ -353,6 +374,19 @@ export class WorldScene extends Phaser.Scene {
         repeat: -1,
       });
     }
+    // The tikbalang's walk (S3-02): a little slower than a person's, it's a big creature.
+    this.anims.create({
+      key: "tikbalang-walk",
+      frames: this.anims.generateFrameNumbers("tikbalang", { start: 0, end: 3 }),
+      frameRate: 6,
+      repeat: -1,
+    });
+    this.tikSprite = this.add.sprite(0, 0, "tikbalang", 0).setOrigin(0.5, 1).setVisible(false);
+    this.tikEye = this.add
+      .sprite(0, 0, "tikbalang-eye", 0)
+      .setOrigin(0.5, 1)
+      .setDepth(DEPTH.glow + 0.5) // above the darkness
+      .setVisible(false);
     this.draw(this.state.players, 0);
 
     // 4. Night: multiply the whole screen by a cool moonlight colour, then add warm glows on top
@@ -616,6 +650,13 @@ export class WorldScene extends Phaser.Scene {
       drawn.find((p) => p.id === this.localId),
       now,
     );
+    // The tikbalang, part-way between the last two ticks too (S3-02).
+    const t = this.state.tikbalang;
+    const b = this.previous.tikbalang ?? t;
+    this.drawTikbalang(
+      t && b ? { ...t, x: b.x + (t.x - b.x) * alpha, y: b.y + (t.y - b.y) * alpha } : undefined,
+      now,
+    );
   }
 
   /** Sends the current state to the guests, if I'm hosting a room that has any. */
@@ -652,6 +693,17 @@ export class WorldScene extends Phaser.Scene {
         following === null ? { id, x, y } : { id, x, y, following },
       ),
       home: this.state.home, // S2-04: who is home (the counter, and the guests' sound)
+      // S3-02: the tikbalang, only during the round (`exactOptionalPropertyTypes`: no undefined).
+      ...(this.state.tikbalang
+        ? {
+            tikbalang: {
+              x: this.state.tikbalang.x,
+              y: this.state.tikbalang.y,
+              mode: this.state.tikbalang.mode,
+              faceX: this.state.tikbalang.faceX,
+            },
+          }
+        : {}),
       dawn: this.state.dawn, // S2-05: the timer (frozen once the round has ended)
       timesLost: this.state.timesLost, // S2-05: for the score
     };
@@ -704,6 +756,31 @@ export class WorldScene extends Phaser.Scene {
       .filter((k) => !predicted.some((p) => p.id === k.id))
       .map((k) => ({ ...k, following: k.following ?? null }));
     this.drawKids([...kids, ...predicted], me, now, guest.buffer.latest?.kids ?? []);
+    this.drawTikbalang(guest.buffer.sampleTikbalang(now), now); // S3-02
+  }
+
+  /**
+   * Draws the tikbalang (S3-02) at this position (engine units), or hides it (outside the round).
+   * Sorted by height among the players, so the darkness covers it unless a light is on it; its
+   * eye glints above the darkness while it stalks or chases.
+   */
+  private drawTikbalang(t: SnapshotTikbalang | undefined, now: number): void {
+    this.tikSprite.setVisible(!!t);
+    if (!t) {
+      this.tikEye.setVisible(false);
+      return;
+    }
+    const x = Math.round(toPx(t.x));
+    const y = Math.round(toPx(t.y) + 4);
+    this.tikSprite.setPosition(x, y).setDepth(DEPTH.player + y / 10_000);
+    this.animate(this.tikSprite, { id: "tikbalang", x: t.x, y: t.y }, "tikbalang-walk", 0, now);
+    this.tikSprite.setFlipX(t.faceX < 0); // the sheet faces right
+    const hunting = t.mode === "stalk" || t.mode === "chase";
+    this.tikEye
+      .setVisible(hunting)
+      .setPosition(x, y)
+      .setFrame(this.tikSprite.frame.name)
+      .setFlipX(t.faceX < 0);
   }
 
   /** The lobby closed ("Start walking"): from now on my keys move my tanod. */
