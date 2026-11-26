@@ -58,6 +58,10 @@
  * engine hides me from the tikbalang for 5 s, then I wait 30 s. Everyone sees a hidden tanod
  * faded and pale; the HUD shows when Q is ready again.
  *
+ * Hoofbeats and the warning ring (S3-05): from the distance between me and the tikbalang,
+ * hoofbeats.ts says how often and how loud to play a hoofbeat and how strong to draw a red arc at
+ * the screen's edge, pointing at it. The ring shows whether the sound is on or not (M switches it).
+ *
  * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
  * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
  * so everyone draws the same speech bubble ("Dito!") over my tanod.
@@ -109,6 +113,8 @@ import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
 import { KID_NAMES, kidRow } from "./kids.ts";
 import { Darkness, type Beam, type Glow } from "./darkness.ts";
 import { EMOTE_HOLD_MS, emoteText } from "./emotes.ts";
+import { warning } from "./hoofbeats.ts";
+import { playHoof } from "./sounds.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { INK, pixelTextStyle, placeCentred } from "./pixelText.ts";
 import { Predictor } from "./prediction.ts";
@@ -252,6 +258,9 @@ export class WorldScene extends Phaser.Scene {
   /** The tikbalang (S3-02) and its eye glint (above the darkness); hidden outside the round. */
   private tikSprite!: Phaser.GameObjects.Sprite;
   private tikEye!: Phaser.GameObjects.Sprite;
+  /** The red warning arc at the screen's edge (S3-05), and when the last hoofbeat played. */
+  private ring!: Phaser.GameObjects.Graphics;
+  private lastHoof = 0;
   /** One sprite per lost child, by id ("k0"…"k4"). Empty in the lobby. */
   private kidSprites = new Map<string, Phaser.GameObjects.Sprite>();
   /** "Tala [E]" over the nearest lost child I can call (S2-03). Hidden when none is in reach. */
@@ -410,6 +419,11 @@ export class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setDepth(DEPTH.glow + 0.5) // above the darkness
       .setVisible(false);
+    // S3-05: the warning ring, fixed to the screen, above the darkness.
+    this.ring = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(DEPTH.glow + 3);
     this.draw(this.state.players, 0);
 
     // 4. Night: multiply the whole screen by a cool moonlight colour, then add warm glows on top
@@ -683,6 +697,7 @@ export class WorldScene extends Phaser.Scene {
     this.drawTikbalang(
       t && b ? { ...t, x: b.x + (t.x - b.x) * alpha, y: b.y + (t.y - b.y) * alpha } : undefined,
       now,
+      drawn.find((p) => p.id === this.localId),
     );
   }
 
@@ -802,7 +817,7 @@ export class WorldScene extends Phaser.Scene {
       .filter((k) => !predicted.some((p) => p.id === k.id))
       .map((k) => ({ ...k, following: k.following ?? null }));
     this.drawKids([...kids, ...predicted], me, now, guest.buffer.latest?.kids ?? []);
-    this.drawTikbalang(guest.buffer.sampleTikbalang(now), now); // S3-02
+    this.drawTikbalang(guest.buffer.sampleTikbalang(now), now, me); // S3-02
   }
 
   /**
@@ -810,8 +825,13 @@ export class WorldScene extends Phaser.Scene {
    * Sorted by height among the players, so the darkness covers it unless a light is on it; its
    * eye glints above the darkness while it stalks or chases.
    */
-  private drawTikbalang(t: SnapshotTikbalang | undefined, now: number): void {
+  private drawTikbalang(
+    t: SnapshotTikbalang | undefined,
+    now: number,
+    me?: { readonly x: number; readonly y: number },
+  ): void {
     this.tikSprite.setVisible(!!t);
+    this.warn(t, me, now); // S3-05: hoofbeats and the ring
     if (!t) {
       this.tikEye.setVisible(false);
       return;
@@ -902,6 +922,37 @@ export class WorldScene extends Phaser.Scene {
       this.beams,
       areas,
     );
+  }
+
+  /**
+   * Hoofbeats and the warning ring (S3-05) for a tikbalang at `t`, heard from my tanod at `me`.
+   * A hoofbeat plays every `intervalMs`; the ring is a thick red arc on a circle around the screen
+   * centre, pointing toward the tikbalang, as strong as it is near (hoofbeats.ts).
+   */
+  private warn(
+    t: SnapshotTikbalang | undefined,
+    me: { readonly x: number; readonly y: number } | undefined,
+    now: number,
+  ): void {
+    this.ring.clear();
+    if (!t || !me) return;
+    const dx = t.x - me.x;
+    const dy = t.y - me.y;
+    const w = warning(Math.sqrt(dx * dx + dy * dy) / UNITS_PER_TILE, t.mode);
+    if (!w) return;
+    if (now - this.lastHoof >= w.intervalMs) {
+      playHoof(w.volume);
+      this.lastHoof = now;
+    }
+    // The arc pulses with the hooves: brightest right after a beat.
+    const pulse = 1 - Math.min(1, (now - this.lastHoof) / w.intervalMs) * 0.5;
+    const { width, height } = this.scale;
+    const angle = Math.atan2(dy, dx);
+    this.ring
+      .lineStyle(4, 0xb0302a, Math.min(1, 0.2 + w.ring * 0.8) * pulse)
+      .beginPath()
+      .arc(width / 2, height / 2, Math.min(width, height) * 0.46, angle - 0.4, angle + 0.4)
+      .strokePath();
   }
 
   /**

@@ -25,7 +25,7 @@ import { LatencyStats } from "./inputSender.ts";
 import { backToMenu, setBadgeDetail, setupLobby, toast } from "./lobby.ts";
 import { onServerMessage, send } from "./net.ts";
 import { setupResult } from "./result.ts";
-import { playCaught, playDawn, playKidHome, playWin } from "./sounds.ts";
+import { playCaught, playDawn, playKidHome, playWin, toggleMuted } from "./sounds.ts";
 import { setupWardrobe } from "./wardrobe.ts";
 import { WorldScene, type RoundInfo } from "./WorldScene.ts";
 
@@ -147,6 +147,11 @@ setupLobby(
       if (roundPhase === "round" && info.phase === "won") playWin();
       if (roundPhase === "round" && info.phase === "lost") playDawn();
       roundPhase = info.phase;
+    });
+    // S3-05: M switches the sound on and off (not while typing in a text box).
+    window.addEventListener("keydown", (event) => {
+      if (event.code !== "KeyM" || event.target instanceof HTMLInputElement) return;
+      toast(toggleMuted() ? "Sound off (M). The red ring still warns you." : "Sound on (M)", 2000);
     });
     // S3-03: someone was caught by the tikbalang.
     world.events.on("naligaw", (player: string, me: boolean) => {
