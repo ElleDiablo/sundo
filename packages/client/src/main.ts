@@ -9,8 +9,8 @@
  *   guest  my keys → send(); snapshot → draw it; host_left → back to the menu (S1-06)
  * After "Start walking", the lobby plaza's picker opens (S2-01, wardrobe.ts): hat and shirt for
  * everyone, Start round for the host. It closes, with a "Brownout!" message, when the round starts.
- * During the round the top-right shows the dawn timer and how many children are home ("Dawn 5:42 ·
- * Home 2 / 5", S2-04/S2-05), and a chime plays for everyone when a child goes inside. When the
+ * During the round the top-right shows the dawn timer, how many children are home and my
+ * flashlight battery ("Dawn 5:42 · Home 2 / 5 · Light 80%", S2-04/S2-05/S3-01), and a chime plays for everyone when a child goes inside. When the
  * round ends the result screen (result.ts) shows the team score; the host takes everyone back.
  * A guest also shows the measured round trip (keys → host → snapshot back) in the room badge, and
  * logs a summary to the console every 50 samples (the number recorded in the S1-05 PR).
@@ -133,7 +133,10 @@ setupLobby(
     world.listenToRound((info) => {
       if (hud) {
         hud.hidden = info.phase === "lobby";
-        hud.textContent = `Dawn ${clock(info.secondsLeft)} · Home ${info.home} / ${info.total}`;
+        // S3-01: my flashlight battery, as a percentage.
+        hud.textContent =
+          `Dawn ${clock(info.secondsLeft)} · Home ${info.home} / ${info.total}` +
+          ` · Light ${info.battery}%`;
       }
       result.show(info);
       // The moment the round ends (not when someone joins an ended round: that's from "round").

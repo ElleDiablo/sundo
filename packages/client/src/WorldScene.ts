@@ -40,6 +40,11 @@
  * every browser shows the same timer and works out the same score (engine teamScore). The host's
  * "Back to the plaza" calls returnToLobby(), which puts everyone back at the spawn for another round.
  *
+ * Darkness and the flashlight (S3-01): during the round a darkness layer (darkness.ts) covers
+ * everything except the safe zones (the map's "safe" rectangles), the map's lights, a small glow
+ * around each tanod and flashlight cones (Space; they point the way each tanod last walked). The
+ * engine runs the battery; snapshots carry facing, light and battery; the HUD shows my battery.
+ *
  * Emotes (S2-06): keys 1–4 put an emote number in my input (kept for at least 150 ms, see
  * emotes.ts); the host's engine shows it for 2 s, at most once a second, and snapshots carry it,
  * so everyone draws the same speech bubble ("Dito!") over my tanod.
@@ -61,7 +66,9 @@ import {
   teamScore,
   findTiledPoint,
   findTiledPoints,
+  findTiledRects,
   mapFromTiled,
+  BATTERY_MAX,
   step,
   TICK_MS,
   TILE_SIZE_PX,
@@ -73,6 +80,7 @@ import {
   type PlayerInput,
   type PlayerState,
   type Spot,
+  type Zone,
   type TiledMap,
   type TileMap,
 } from "@sundo/engine";
@@ -81,6 +89,7 @@ import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
 import { KID_NAMES, kidRow } from "./kids.ts";
+import { Darkness, type Beam, type Glow } from "./darkness.ts";
 import { EMOTE_HOLD_MS, emoteText } from "./emotes.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { INK, pixelTextStyle, placeCentred } from "./pixelText.ts";
@@ -115,6 +124,8 @@ export interface RoundInfo {
   readonly secondsLeft: number;
   readonly timesLost: number;
   readonly score: number;
+  /** My flashlight battery, 0–100 % (S3-01). */
+  readonly battery: number;
 }
 export type OnRound = (info: RoundInfo) => void;
 
@@ -127,18 +138,66 @@ const NIGHT_TINT = 0x9ea8d9;
  */
 const BROWNOUT_TINT = 0xb0b4c4;
 
-const DEPTH = { ground: 0, decor: 1, objects: 2, player: 10, above: 20, night: 30, glow: 31 };
+const DEPTH = {
+  ground: 0,
+  decor: 1,
+  objects: 2,
+  player: 10,
+  above: 20,
+  night: 30,
+  dark: 30.5, // S3-01: the brownout's darkness, with the lights cut out
+  glow: 31,
+};
+
+/**
+ * How dark the darkness layer is in each phase (S3-01): none in the lobby, nearly black during the
+ * round and its win screen, and much lighter once dawn has come.
+ */
+const DARKNESS: Record<Phase, number> = { lobby: 0, round: 0.92, won: 0.92, lost: 0.4 };
+/** Light sizes in pixels (diameter): around each tanod, and the map's doorways / windows / candles. */
+const TANOD_GLOW = 40;
+const MAP_GLOW: Record<string, number> = { doorway: 56, window: 36, kapilya: 96, store: 96 };
 
 /** Keep the walk animation going this long after a player last moved, so it doesn't flicker. */
 const WALK_HOLD_MS = 120;
 
 type Keys = Record<
-  "W" | "A" | "S" | "D" | "UP" | "DOWN" | "LEFT" | "RIGHT" | "E" | "ONE" | "TWO" | "THREE" | "FOUR",
+  | "W"
+  | "A"
+  | "S"
+  | "D"
+  | "UP"
+  | "DOWN"
+  | "LEFT"
+  | "RIGHT"
+  | "E"
+  | "ONE"
+  | "TWO"
+  | "THREE"
+  | "FOUR"
+  | "SPACE",
   Phaser.Input.Keyboard.Key
 >;
 
 /** A player as draw() takes it: from a snapshot (emote missing = none) or the engine (null = none). */
-type DrawnPlayer = SnapshotPlayer | (Omit<SnapshotPlayer, "emote"> & { emote: number | null });
+type DrawnPlayer =
+  | SnapshotPlayer
+  | (Omit<SnapshotPlayer, "emote" | "light"> & {
+      emote: number | null;
+      // From the engine (host, or my own prediction): facing as two numbers (S3-01).
+      faceX?: number;
+      faceY?: number;
+      light?: boolean;
+    });
+
+/** A snapshot's packed facing (0–8) → faceX, faceY (each −1, 0 or 1). Missing → facing down. */
+function unpackFace(face: number | undefined): { faceX: number; faceY: number } {
+  if (face === undefined) return { faceX: 0, faceY: 1 };
+  return { faceX: Math.floor(face / 3) - 1, faceY: (face % 3) - 1 };
+}
+
+/** faceX, faceY → the snapshot's packed facing, 0–8. */
+const packFace = (faceX: number, faceY: number) => (faceX + 1) * 3 + (faceY + 1);
 
 export class WorldScene extends Phaser.Scene {
   private state!: GameState; // the engine's current state
@@ -179,6 +238,13 @@ export class WorldScene extends Phaser.Scene {
   /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
   private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
+  /** The darkness layer (S3-01) and the fixed lights cut out of it: the map's lights and safe zones. */
+  private darkness!: Darkness;
+  private mapGlows: Glow[] = [];
+  private safeZones: Zone[] = [];
+  /** This frame's moving lights (each tanod's glow and flashlight), collected by draw(). */
+  private tanodGlows: Glow[] = [];
+  private beams: Beam[] = [];
   private brownout!: Phaser.GameObjects.Rectangle; // extra darkness, shown once the round starts
   /** The hat and shirt I've picked (S2-01). Seat 0 until I join someone's room as a guest. */
   private look: Look = { hat: 0, shirt: defaultShirt(0) };
@@ -227,6 +293,9 @@ export class WorldScene extends Phaser.Scene {
     // hat + shirt combination (looks.ts), 24 rows.
     this.load.spritesheet("tanod", "assets/sprites/tanod.png", { frameWidth: 16, frameHeight: 28 });
     this.load.image("glow", "assets/sprites/glow.png");
+    // S3-01: white light shapes, erased out of the darkness (darkness.ts).
+    this.load.image("light", "assets/sprites/light.png");
+    this.load.image("cone", "assets/sprites/cone.png");
     // The lost children (S2-02): same frame size, one row per child (kids.ts), 4 walk frames.
     this.load.spritesheet("kids", "assets/sprites/kids.png", { frameWidth: 16, frameHeight: 28 });
   }
@@ -250,10 +319,12 @@ export class WorldScene extends Phaser.Scene {
     const seed = crypto.getRandomValues(new Uint32Array(1))[0]!;
     const kidSpots = findTiledPoints(tiled, "spawns", "kid");
     this.homes = findTiledPoints(tiled, "spawns", "home"); // S2-04: the houses, k0's first
+    this.safeZones = findTiledRects(tiled, "zones", "safe"); // S3-01: plaza and store
     this.state = createGame(this.map, [{ id: this.localId, ...this.spawn, ...this.look }], {
       seed,
       kidSpots,
       homes: this.homes,
+      safeZones: this.safeZones,
     });
     this.previous = this.state;
     this.clock = createFixedStep(TICK_MS);
@@ -300,7 +371,10 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(DEPTH.night)
       .setBlendMode(Phaser.BlendModes.MULTIPLY)
       .setVisible(false); // switched on when the round starts (reportLobby)
+    // S3-01: the brownout's darkness, between the night tint and the warm glows.
+    this.darkness = new Darkness(this, DEPTH.dark);
     for (const light of map.getObjectLayer("lights")?.objects ?? []) {
+      this.mapGlows.push({ x: light.x ?? 0, y: light.y ?? 0, size: MAP_GLOW[light.name] ?? 48 });
       this.glows.push(
         this.add
           .image(light.x ?? 0, light.y ?? 0, "glow")
@@ -325,7 +399,8 @@ export class WorldScene extends Phaser.Scene {
     const keyboard = this.input.keyboard;
     if (!keyboard) throw new Error("no keyboard input available");
     // E: call a child (S2-03). ONE–FOUR: the number keys 1–4 above the letters, emotes (S2-06).
-    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR") as Keys;
+    // SPACE: the flashlight (S3-01).
+    this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR,SPACE") as Keys;
     // A press of 1–4 is remembered for EMOTE_HOLD_MS, so even a very quick tap reaches the engine.
     (["ONE", "TWO", "THREE", "FOUR"] as const).forEach((name, emote) =>
       this.keys[name].on("down", () => {
@@ -436,6 +511,7 @@ export class WorldScene extends Phaser.Scene {
         kids: (snapshot.kids ?? []).map((k) => ({ ...k, following: k.following ?? null })),
         // The phase only when the snapshot has one (`exactOptionalPropertyTypes`, S2-05).
         ...(snapshot.phase ? { phase: snapshot.phase } : {}),
+        ...(me.battery === undefined ? {} : { battery: me.battery }), // S3-01
       });
     }
 
@@ -493,6 +569,7 @@ export class WorldScene extends Phaser.Scene {
     else this.updateHost(delta, now);
     this.reportLobby();
     this.reportRound();
+    this.drawDarkness();
     // Candles flicker a little (each one slightly out of step with the others).
     this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
   }
@@ -553,8 +630,19 @@ export class WorldScene extends Phaser.Scene {
     const snapshot: SnapshotFields = {
       tick,
       // The emote only while one is showing (S2-06), like a child's `following`.
-      players: this.state.players.map(({ id, x, y, hat, shirt, emote }) =>
-        emote === null ? { id, x, y, hat, shirt } : { id, x, y, hat, shirt, emote },
+      // S3-01: facing packed into one number, the light only while on, and the battery.
+      players: this.state.players.map(
+        ({ id, x, y, hat, shirt, emote, faceX, faceY, light, battery }) => ({
+          id,
+          x,
+          y,
+          hat,
+          shirt,
+          ...(emote === null ? {} : { emote }),
+          face: packFace(faceX, faceY),
+          ...(light ? { light } : {}),
+          battery,
+        }),
       ),
       acks,
       ackTicks,
@@ -597,8 +685,16 @@ export class WorldScene extends Phaser.Scene {
         ? { hat: old.hat ?? 0, shirt: old.shirt ?? defaultShirt(guest.seat) }
         : this.look;
     // My speech bubble comes from the snapshot (the host decides it, ~100 ms after the key).
+    // My flashlight comes from the prediction too (S3-01), so it turns and switches at once.
     const me = mine
-      ? { id: this.localId, ...mine, hat: look.hat, shirt: look.shirt, emote: old?.emote ?? null }
+      ? {
+          id: this.localId,
+          ...mine,
+          hat: look.hat,
+          shirt: look.shirt,
+          emote: old?.emote ?? null,
+          ...guest.predictor.facing(),
+        }
       : old;
     this.draw([...players.filter((p) => p.id !== this.localId), ...(me ? [me] : [])], now);
     // Children: the snapshot's, except mine, which come from my prediction (instant, S2-03).
@@ -627,6 +723,7 @@ export class WorldScene extends Phaser.Scene {
       left: k.A.isDown || k.LEFT.isDown,
       right: k.D.isDown || k.RIGHT.isDown,
       call: k.E.isDown, // S2-03: call the nearest lost child
+      light: k.SPACE.isDown, // S3-01: the flashlight
       ...look,
     };
     // S2-06: the emote key, while it's held or for EMOTE_HOLD_MS after it was pressed.
@@ -661,6 +758,28 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
+   * Redraws the brownout's darkness (S3-01) for the current phase: the map's fixed lights and safe
+   * zones, plus this frame's tanod glows and flashlight beams (collected by draw()).
+   */
+  private drawDarkness(): void {
+    const phase = this.guest ? (this.guest.buffer.latest?.phase ?? "lobby") : this.state.phase;
+    const px = TILE_SIZE_PX;
+    const areas = this.safeZones.map((z) => ({
+      x: z.tileX * px,
+      y: z.tileY * px,
+      width: z.width * px,
+      height: z.height * px,
+    }));
+    this.darkness.draw(
+      this.cameras.main,
+      DARKNESS[phase],
+      [...this.mapGlows, ...this.tanodGlows],
+      this.beams,
+      areas,
+    );
+  }
+
+  /**
    * The round's counter (S2-04): which children are home, read from my engine (host) or the newest
    * snapshot (guest). A child who wasn't home last frame fires the scene event "kid_home" with
    * their name (the page plays a sound and says so); the very first read only records who's home,
@@ -674,6 +793,10 @@ export class WorldScene extends Phaser.Scene {
     const lost = this.guest ? (latest?.kids?.length ?? 0) : this.state.kids.length;
     const dawn = this.guest ? (latest?.dawn ?? 0) : this.state.dawn;
     const timesLost = this.guest ? (latest?.timesLost ?? 0) : this.state.timesLost;
+    // My battery (S3-01): the host's engine, or my copy in the newest snapshot.
+    const battery = this.guest
+      ? (latest?.players.find((p) => p.id === this.localId)?.battery ?? BATTERY_MAX)
+      : (this.find(this.state, this.localId)?.battery ?? BATTERY_MAX);
 
     // The counter first, so a "kid_home" listener already sees the new numbers. The score is the
     // engine's own formula, so host and guests show the same number.
@@ -684,6 +807,7 @@ export class WorldScene extends Phaser.Scene {
       secondsLeft: secondsLeft(dawn),
       timesLost,
       score: teamScore({ saved: home.length, dawn, timesLost }),
+      battery: Math.ceil((battery / BATTERY_MAX) * 100),
     };
     const text = JSON.stringify(info);
     if (text !== this.shownRound) {
@@ -706,6 +830,8 @@ export class WorldScene extends Phaser.Scene {
    */
   private draw(players: readonly DrawnPlayer[], now: number): void {
     const ids = new Set(players.map((p) => p.id));
+    this.tanodGlows = [];
+    this.beams = [];
     for (const [id, sprite] of this.sprites) {
       if (ids.has(id)) continue;
       sprite.destroy();
@@ -728,6 +854,17 @@ export class WorldScene extends Phaser.Scene {
 
       this.animate(sprite, p, walkKey(row), row * WALK_FRAMES, now);
       this.drawBubble(p.id, emoteText(p.emote), Math.round(x), Math.round(y) - 30);
+
+      // S3-01: a small glow around every tanod, and their flashlight cone while it's on. The
+      // cone starts at their chest (12 px above the feet) and points the way they face.
+      this.tanodGlows.push({ x, y: y - 10, size: TANOD_GLOW });
+      if (p.light) {
+        const { faceX, faceY } =
+          "faceX" in p && p.faceX !== undefined
+            ? { faceX: p.faceX, faceY: p.faceY ?? 1 }
+            : unpackFace("face" in p ? p.face : undefined);
+        this.beams.push({ x, y: y - 12, angle: Math.atan2(faceY, faceX) });
+      }
     }
   }
 
