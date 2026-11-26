@@ -327,3 +327,14 @@ describe("the chase burst (S3-07)", () => {
     expect(tik(after).timer).toBe(BURST_TICKS);
   });
 });
+
+describe("dogs in a round (S3-08)", () => {
+  it("bark when the tikbalang passes near them during the round", () => {
+    const state = round({ x: 2500, y: 9500, mode: "wait", timer: 50 }, 18, 1, {
+      dogs: [{ tileX: 4, tileY: 9 }],
+    });
+    const { state: after, events } = run(state, {}, 1);
+    expect(events).toContainEqual({ type: "dog_bark", dog: "d0" });
+    expect(after.dogs[0]!.bark).toBeGreaterThan(0);
+  });
+});

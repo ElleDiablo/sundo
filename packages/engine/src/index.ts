@@ -16,6 +16,15 @@ export {
   tileInZone,
   type Zone,
 } from "./light.ts";
+// The dogs that bark when the tikbalang passes (S3-08).
+export {
+  BARK_TICKS,
+  createDogs,
+  DOG_RANGE,
+  DOG_REST_TICKS,
+  updateDogs,
+  type DogState,
+} from "./dogs.ts";
 // Path-finding on the tile grid (S3-02).
 export { nextStep, type Tile } from "./path.ts";
 // The tikbalang's state machine (S3-02).

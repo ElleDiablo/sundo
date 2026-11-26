@@ -20,6 +20,7 @@
 
 // Bring in helpers from map.ts. `type TileMap` imports only the type (erased when the code runs).
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
+import { createDogs, updateDogs, type DogState } from "./dogs.ts";
 import { inZone, type Zone } from "./light.ts";
 import { createRng, type Rng } from "./rng.ts";
 import { spawnTikbalang, updateTikbalang, type TikbalangState, type TikMode } from "./tikbalang.ts";
@@ -205,6 +206,8 @@ export interface GameState {
   readonly ambush: readonly Spot[];
   // Where a caught player is dropped (S3-03): the map's "grove" points, deep in the bamboo. Fixed.
   readonly grove: readonly Spot[];
+  // The dogs (S3-08): asleep at the map's "dog" points, barking when the tikbalang passes.
+  readonly dogs: readonly DogState[];
   // The last catch this round (S3-03), so every browser can say "Naligaw!" once: who and when.
   readonly lastCaught: { readonly player: string; readonly tick: number } | null;
   // Each house's doorway, in the map's order: child "k<n>" lives at homes[n] (S2-04). Fixed.
@@ -236,6 +239,8 @@ export type GameEvent =
   | { readonly type: "kid_called"; readonly kid: string; readonly player: string }
   // The tikbalang started stalking or chasing a player (S3-02): for sounds, telemetry later.
   | { readonly type: "tikbalang"; readonly mode: TikMode; readonly player: string }
+  // A dog woke and started barking because the tikbalang passed nearby (S3-08).
+  | { readonly type: "dog_bark"; readonly dog: string }
   // A player turned their shirt inside out (S3-04): for a sound, telemetry later.
   | { readonly type: "baliktad"; readonly player: string }
   // The tikbalang caught a player (S3-02): they're naligaw, dropped in the bamboo grove (S3-03).
@@ -273,6 +278,7 @@ export interface GameOptions {
   readonly patrol?: readonly Spot[]; // the tikbalang's patrol points (S3-02)
   readonly ambush?: readonly Spot[]; // the tikbalang's ambush points (S3-02)
   readonly grove?: readonly Spot[]; // where caught players are dropped (S3-03)
+  readonly dogs?: readonly Spot[]; // where the dogs sleep (S3-08)
 }
 
 // ─── Public functions ────────────────────────────────────────────────────────────────────────
@@ -330,6 +336,7 @@ export function createGame(
     patrol: options.patrol ?? [],
     ambush: options.ambush ?? [],
     grove: options.grove ?? [],
+    dogs: createDogs(options.dogs ?? []),
     lastCaught: null,
     dawn: 0,
     timesLost: 0,
@@ -529,6 +536,9 @@ export function step(state: GameState, inputs: Inputs): StepResult {
     // Caught (S3-03): naligaw. Uses the same generator (for the drop spot) before saving it.
     if (caught) next = naligaw(next, caught, rng);
     next = { ...next, rngState: rng.state };
+    // The dogs (S3-08) react to where the tikbalang is now.
+    const dogs = updateDogs(state.dogs, tikbalang, events);
+    if (dogs !== state.dogs) next = { ...next, dogs };
   }
 
   // The round: the dawn timer counts down, and the round ends (S2-05). Every child home wins,
@@ -579,6 +589,7 @@ function beginRound(state: GameState): GameState {
     dawn: ROUND_TICKS, // S2-05: 6 minutes to dawn
     timesLost: 0,
     lastCaught: null, // S3-03
+    dogs: state.dogs.map((d) => ({ ...d, bark: 0, rest: 0 })), // S3-08: all asleep
     rngState,
     // S3-02: the tikbalang appears at its spawn point (if the map has one), waiting out the grace.
     tikbalang: state.tikSpawn ? spawnTikbalang(state.tikSpawn) : null,

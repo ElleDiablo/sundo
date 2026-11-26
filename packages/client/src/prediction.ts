@@ -163,6 +163,7 @@ export class Predictor {
       patrol: [],
       ambush: [],
       grove: [],
+      dogs: [], // S3-08: the dogs come from snapshots
       lastCaught: null,
       // No houses: taking a child home isn't predicted. The host decides it, and the next
       // snapshot (without that child) removes them from my line about one round trip later.
