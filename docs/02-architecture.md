@@ -145,8 +145,8 @@ sequenceDiagram
 | `$connect` / `$disconnect` | any → server | (none). On `$disconnect` the relay frees the seat and deletes the connection's items; a guest leaving sends `player_left { seat }` to the host, the host leaving sends `host_left` to every guest (the room has ended) | once |
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
-| `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt? }` now (`light, call, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y}] }` now (`tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}] }` now (`tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -176,6 +176,12 @@ starts, the engine picks 5 of them with its seeded generator (a partial Fisher�
 the host's seed alone decides where the children are, and a replay puts them in the same places.
 The generator's state is part of `GameState` (`rngState`), so later random choices continue the
 same sequence. A test on the real map checks every spot can be walked to from the plaza.
+
+**Escorting (S2-03):** `call` is E held. Each tick, a player holding it calls the nearest lost child
+within 1.5 tiles (at most 2 per player). A following child walks toward whoever is ahead of it in
+the line and stops 0.8 tiles short, colliding with walls like a player; leading slows the player
+to 2.5 tiles/s. The guest's predictor gets the snapshot's children too, so a guest's call and its
+own line react at once; children following others come from snapshots.
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that

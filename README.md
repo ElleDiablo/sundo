@@ -18,7 +18,8 @@ sends keys and draws the host's snapshots 20 times a second.*
 
 **Try it:** open the live link, press **Create room**, and share the 4-letter code. Friends open
 the same link, press **Join with code** and type it. Walk with WASD or the arrow keys, pick a hat
-and a shirt in the kapilya plaza, and the host presses **Start round**.
+and a shirt in the kapilya plaza, and the host presses **Start round**. Find the lost children and
+press **E** next to one so they follow you (up to two at a time).
 
 ## Highlights
 - **Real-time multiplayer, fully serverless:** API Gateway WebSockets + Lambda + DynamoDB, with
