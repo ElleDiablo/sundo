@@ -822,10 +822,7 @@ function updateLight(
   } else if (light && state.phase === "round") {
     battery -= 1;
   }
-  const same =
-    aim === player.aim &&
-    light === player.light &&
-    battery === player.battery;
+  const same = aim === player.aim && light === player.light && battery === player.battery;
   return same ? player : { ...player, aim, light, battery };
 }
 

@@ -14,8 +14,6 @@
  *   sprites/tikbalang.png the tikbalang (from my modern character sheet), 24 × 32 frames, 4-frame walk
  *   sprites/tikbalang-eye.png  only its eye, same frames: drawn above the darkness (S3-02)
  *   sprites/dog.png       a dog (aso), 2 frames: asleep, barking (S3-08)
- *   sprites/light.png     a round light (white, alpha in 4 steps), cut out of the darkness (S3-01)
- *   sprites/cone.png      the flashlight's 35°-each-side, 5-tile cone, pointing right (S3-01)
  *   maps/barangay.tmj     a 48×32 Tiled map using the tileset
  *
  * Layers (drawn bottom to top; the player sits between objects and above):
@@ -197,17 +195,46 @@ const plaza = [6, 7].map((v) =>
 const dike = tile(8, 0, "dike", false, (x, y) =>
   y === 0 || y === 15 ? C("#3f3120") : pick([C("#4a3a26"), C("#544430")], hash(x, y, 3)),
 );
+// Look pass: water that reads as water. Paddies: still, dark water with clumps of rice seedlings
+// (three blades each, in rows, each clump with a darker reflection under it) and the odd pale
+// glint of sky. Creek: two tiles, the left one with its bank on the left, the right one with its
+// bank on the right; mud, then a darker shelf of shallow water, then the current, drawn as short
+// pale streaks running down the stream (it flows north–south). Rain ripples are drawn on top of
+// both while the game runs (WorldScene's rain).
+const PADDY_WATER = ["#16303e", "#183444", "#1a3848"].map(C);
 const paddy = [9, 10].map((v) =>
   tile(v, 0, `paddy-${v}`, true, (x, y) => {
-    if (x % 5 === 1 && (y === 6 || y === 13)) return C("#4f7a3a");
-    if (x % 5 === 1 && (y === 5 || y === 12)) return C("#6a9a48");
-    return hash(x + v * 16, y, 4) < 0.015 ? C("#3d6a80") : pick(WATER, hash(x + v * 16, y, 5));
+    // Rice clumps: every 5th column, two rows per tile; one in four clumps is missing (uneven planting).
+    const col = (x + (v === 10 ? 2 : 0)) % 5;
+    for (const row of [6, 13]) {
+      if (hash(Math.floor(x / 5) + v * 7, row, 4) < 0.25) continue;
+      if (y === row + 1 && col === 2) return C("#0f2430"); // the clump's reflection
+      if (y === row && col === 2) return C("#3f6a30"); // base
+      if (y === row - 1 && (col === 1 || col === 2 || col === 3)) return C("#4f7a3a"); // three blades
+      if (y === row - 2 && (col === 1 || col === 3)) return C("#6a9a48"); // their tips, splayed
+    }
+    const h = hash(x + v * 16, y, 5);
+    if (h < 0.012) return C("#4a7890"); // a glint of sky
+    // Slightly lighter towards the top of each tile (the dike's far edge catches more sky).
+    return pick(PADDY_WATER, Math.min(0.999, h * 0.7 + (y < 4 ? 0.3 : 0)));
   }),
 );
+const CURRENT = ["#2c5468", "#3d6a80"].map(C);
 const creek = [11, 12].map((v) =>
-  tile(v, 0, `creek-${v}`, true, (x, y) =>
-    (x + y * 2 + v) % 9 === 0 ? C("#3d6a80") : pick(WATER, hash(x + v * 16, y, 6)),
-  ),
+  tile(v, 0, `creek-${v}`, true, (x, y) => {
+    const fromBank = v === 11 ? x : 15 - x; // 0 at this tile's bank
+    if (fromBank === 0) return C("#3a2e1e"); // mud at the water's edge
+    if (fromBank === 1) return hash(x, y, 7) < 0.5 ? C("#2a2a22") : C("#11222c"); // wet bank
+    if (fromBank <= 3) return C("#11232e"); // the darker shallow shelf
+    // The current: short vertical streaks (2–3 px) in a staggered pattern, so tiles stacked down
+    // the creek look like one flowing surface rather than stripes.
+    const lane = (x + v * 3) % 4;
+    const at = (y + lane * 5) % 8;
+    if (lane === 1 && at < 3 && hash(x, Math.floor((y + lane * 5) / 8), 8) < 0.6) {
+      return at === 0 ? CURRENT[1]! : CURRENT[0]!;
+    }
+    return pick(WATER, hash(x + v * 16, y, 6));
+  }),
 );
 const bridge = tile(13, 0, "bridge", false, (x, y) =>
   y % 4 === 0 ? C("#4a3320") : x === 0 || x === 15 ? C("#3e2f17") : C("#7a5530"),
@@ -634,7 +661,7 @@ const path = (x0: number, y0: number, w: number, h: number) =>
 path(1, 17, W - 2, 2); // main road
 path(22, 11, 2, 6); // plaza → road
 // Creek (cols 17–18) with two crossings
-fill(17, 0, 2, H, (x, y) => put(L.ground, x, y, pick(creek, hash(x, y, 51))));
+fill(17, 0, 2, H, (x, y) => put(L.ground, x, y, creek[x - 17]!)); // bank on the outer sides
 // Kapilya plaza
 fill(19, 7, 9, 4, (x, y) => put(L.ground, x, y, pick(plaza, hash(x, y, 52))));
 // Bamboo grove floor (bottom left) and paddies (bottom right)
@@ -1219,32 +1246,6 @@ for (let y = 0; y < 64; y++)
     glow.set(x, y, [Math.round(255 * k), Math.round(150 * k), Math.round(60 * k)], 255);
   }
 
-// Lights cut out of the darkness (S3-01). White, with the strength in the alpha channel. The
-// strength falls off in 4 hard steps instead of a smooth gradient: banded light is the "lit pixel
-// art" look (GDD §9), and it stays crisp when the canvas is scaled up.
-const band = (k: number) => (k > 0.75 ? 255 : k > 0.5 ? 205 : k > 0.25 ? 140 : k > 0 ? 70 : 0);
-const WHITE: RGB = [255, 255, 255];
-const lightImg = new Img(64, 64);
-for (let y = 0; y < 64; y++)
-  for (let x = 0; x < 64; x++) {
-    const d = Math.hypot(x + 0.5 - 32, y + 0.5 - 32) / 32;
-    if (d < 1) lightImg.set(x, y, WHITE, band(1 - d * d));
-  }
-// The cone: apex at the middle of the left edge, 80 px (5 tiles) long, 35° either side.
-const CONE_LEN = 80;
-const coneH = 2 * Math.ceil(CONE_LEN * Math.sin((35 * Math.PI) / 180)) + 2;
-const cone = new Img(CONE_LEN + 4, coneH);
-for (let y = 0; y < coneH; y++)
-  for (let x = 0; x < CONE_LEN + 4; x++) {
-    const dx = x + 0.5;
-    const dy = y + 0.5 - coneH / 2;
-    const d = Math.hypot(dx, dy) / CONE_LEN;
-    const angle = (Math.atan2(Math.abs(dy), dx) * 180) / Math.PI; // 0° = straight ahead
-    if (d >= 1 || angle >= 35) continue;
-    // Brightest near the torch and along the middle; dimmer towards the far end and the edges.
-    cone.set(x, y, WHITE, band((1 - d ** 1.6) * Math.min(1, (35 - angle) / 10)));
-  }
-
 // ─── Write ───────────────────────────────────────────────────────────────────────────────────
 const mapPath = join(out, "maps", "barangay.tmj");
 if (
@@ -1262,11 +1263,9 @@ writeFileSync(join(out, "tiles", "barangay.png"), sheet.png());
 writeFileSync(join(out, "sprites", "tanod.png"), tanod.png());
 writeFileSync(join(out, "sprites", "kids.png"), kidsSheet.png());
 writeFileSync(join(out, "sprites", "glow.png"), glow.png());
-writeFileSync(join(out, "sprites", "light.png"), lightImg.png());
 writeFileSync(join(out, "sprites", "tikbalang.png"), tikSheet.png());
 writeFileSync(join(out, "sprites", "dog.png"), dogSheet.png());
 writeFileSync(join(out, "sprites", "tikbalang-eye.png"), eyeSheet.png());
-writeFileSync(join(out, "sprites", "cone.png"), cone.png());
 writeFileSync(mapPath, JSON.stringify(tmj) + "\n");
 console.log(
   `tileset ${COLS}×${ROWS} (${collides.size} solid tiles), tanod ${HATS.length * SHIRTS.length} looks × 4 frames, ${kidsData.kids.length} kids, ${KID_SPOTS.length} kid spots, ${houses.length} homes, ${lights.length} lights, map ${W}×${H}`,
