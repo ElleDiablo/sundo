@@ -16,6 +16,26 @@ export {
   tileInZone,
   type Zone,
 } from "./light.ts";
+// Path-finding on the tile grid (S3-02).
+export { nextStep, type Tile } from "./path.ts";
+// The tikbalang's state machine (S3-02).
+export {
+  AMBUSH_RANGE,
+  CATCH_RANGE,
+  canSee,
+  GRACE_TICKS,
+  isLit,
+  LOSE_SIGHT_TICKS,
+  SIGHT_DARK,
+  SIGHT_LIT,
+  spawnTikbalang,
+  STALK_GAP,
+  TIK_SPEED,
+  updateTikbalang,
+  type TikbalangState,
+  type TikMode,
+  type TikWorld,
+} from "./tikbalang.ts";
 // Seeded random numbers (the only randomness the engine may use).
 export { createRng, type Rng } from "./rng.ts";
 // The tile map: which tiles are walls, and unit/tile conversions.
