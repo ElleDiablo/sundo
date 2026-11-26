@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?,face,light?,battery,bal?,cool?}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost, tikbalang{x,y,mode,faceX}?, caught{player,tick}? }` now; only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?,face,light?,battery,bal?,cool?}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost, tikbalang{x,y,mode,faceX}?, caught{player,tick}?, barking[]? }` now; only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -233,6 +233,11 @@ mode, `hoofbeats.ts` gives a hoofbeat interval (900 → 350 ms from 12 tiles to 
 a volume and a ring strength; silent while it waits or lies in ambush. Hoofbeats are two Web Audio
 thuds; the ring is a red arc around the screen centre pointing at it, drawn whether or not the
 sound is on (M toggles sound, remembered in localStorage).
+
+**Dogs (S3-08):** four `dog` points; `dogs.ts` in the engine wakes a dog for 3 s (`dog_bark`
+event) when the tikbalang is within 5 tiles, then it rests 5 s. Snapshots list the barking dogs'
+ids. The client sits the dog up, shows "Aw! Aw!" above the darkness and plays a bark (quieter
+further away); with the sound off, a yellow edge arc points at an off-screen barking dog.
 
 **Emotes (S2-06, ADR-0005):** keys 1–4 add `emote` (0–3) to the next `input`; a quick tap stays in
 the input for 150 ms so it can't fall between two ticks or two messages. The host's engine shows it

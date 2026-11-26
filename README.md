@@ -24,7 +24,7 @@ press **E** next to one so they follow you (up to two at a time). Watch out for 
 dark you may only see its eye. If it catches you, you're *naligaw*: lost in the bamboo grove,
 and your children run off to hide. Press **Q** for *baliktad* (your shirt inside out): the
 tikbalang can't see you for 5 seconds. Listen for hooves (or watch the red ring at the edge of the screen; **M** switches
-sound off). A label shows which house is
+sound off), and for dogs barking: they wake when the tikbalang passes. A label shows which house is
 theirs; walk them to its doorway and they go inside. Bring all five home before the 6-minute
 dawn timer runs out; the result screen shows the team score, and the host can start another
 round. Press **1–4** to call out "Dito!", "Takbo!", "Tulong!" or "Salamat!" to the team.
