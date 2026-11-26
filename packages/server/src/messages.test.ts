@@ -62,7 +62,12 @@ describe("readJoinCode", () => {
 });
 
 describe("input and snapshot messages", () => {
-  const snapshot = { tick: 40, players: [{ id: "p0", x: 1500, y: -20 }], acks: [0, 3] };
+  const snapshot = {
+    tick: 40,
+    players: [{ id: "p0", x: 1500, y: -20 }],
+    acks: [0, 3],
+    ackTicks: [0, 12],
+  };
 
   it("reads valid ones, both from a browser and from the relay", () => {
     const input = { seq: 7, up: true, down: false, left: false, right: false };
@@ -77,6 +82,11 @@ describe("input and snapshot messages", () => {
       type: "snapshot",
       ...snapshot,
     });
+  });
+
+  it("still reads a snapshot without ackTicks (from a host that predates NET-01)", () => {
+    const older = { tick: snapshot.tick, players: snapshot.players, acks: snapshot.acks };
+    expect(readSnapshotBody(JSON.stringify(older))).toEqual(older);
   });
 
   it("drops fields it doesn't know instead of passing them on", () => {
@@ -105,6 +115,8 @@ describe("input and snapshot messages", () => {
       { ...snapshot, players: [{ id: "a-very-long-id", x: 0, y: 0 }] },
       { ...snapshot, acks: [1, 2, 3, 4, 5] },
       { ...snapshot, acks: "none" },
+      { ...snapshot, ackTicks: [1, -2] },
+      { ...snapshot, ackTicks: "lots" },
     ]) {
       expect(readSnapshotBody(JSON.stringify(bad)), JSON.stringify(bad)).toBeUndefined();
     }

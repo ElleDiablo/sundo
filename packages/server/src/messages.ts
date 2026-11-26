@@ -41,6 +41,13 @@ export interface SnapshotFields {
    * A guest compares it with when it sent that input to measure the full round trip.
    */
   readonly acks: readonly number[];
+  /**
+   * ackTicks[seat] = how many ticks the host has applied that seat's latest input (acks[seat]) for
+   * so far (NET-01). Inputs are sent only when keys change and the host keeps using the last one,
+   * so a guest needs this count to know which of its predicted ticks the host has already run.
+   * Optional so an older client or relay without it still works (the guest then doesn't predict).
+   */
+  readonly ackTicks?: readonly number[];
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -143,10 +150,14 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
 
 /** Checks the fields of a snapshot message; undefined if anything is off. */
 function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
-  const { tick, players, acks } = v;
+  const { tick, players, acks, ackTicks } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
-  if (!Array.isArray(acks) || acks.length > MAX_PLAYERS || !acks.every(isCount)) return undefined;
+  const isCounts = (a: unknown): a is number[] =>
+    Array.isArray(a) && a.length <= MAX_PLAYERS && a.every(isCount);
+  if (!isCounts(acks)) return undefined;
+  // ackTicks may be missing (older host), but if it's there it must be valid.
+  if (ackTicks !== undefined && !isCounts(ackTicks)) return undefined;
   const checked: SnapshotPlayer[] = [];
   for (const p of players as unknown[]) {
     if (!p || typeof p !== "object") return undefined;
@@ -154,7 +165,9 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     if (typeof id !== "string" || id.length > 8 || !isCoord(x) || !isCoord(y)) return undefined;
     checked.push({ id, x, y }); // copy only the known fields: extra ones are dropped, not passed on
   }
-  return { tick, players: checked, acks: acks as number[] };
+  return ackTicks === undefined
+    ? { tick, players: checked, acks }
+    : { tick, players: checked, acks, ackTicks };
 }
 
 /** Parses a JSON message body into an object, or undefined if it isn't one. */
