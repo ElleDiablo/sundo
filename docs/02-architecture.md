@@ -142,9 +142,9 @@ sequenceDiagram
 
 | Route | From → To | Body | Rate |
 |---|---|---|---|
-| `$connect` / `$disconnect` | any → server | (none) | once |
+| `$connect` / `$disconnect` | any → server | (none). On `$disconnect` the relay frees the seat and deletes the connection's items; a guest leaving sends `player_left { seat }` to the host, the host leaving sends `host_left` to every guest (the room has ended) | once |
 | `create_room` | host → server → host | `{}` now (`{ name, hat, shirt }` from S2-01); reply `{ type: "room_created", code }` | once |
-| `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` | once |
+| `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `join` | player → server → host | `{ room, name, hat, shirt }` | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right }` now (`light, call, baliktad, emote` later); the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
 | `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[], ackTicks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 10/s (every 2nd tick) |
