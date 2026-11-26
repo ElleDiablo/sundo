@@ -1,15 +1,21 @@
 /**
  * Tests for the game rules: creating a game, adding players, and step() (speed, walls, sliding,
- * determinism). Small hand-drawn maps keep each case easy to picture.
+ * determinism), plus the lobby (S2-01): looks, the host's Start and the full-room countdown.
+ * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
 import {
   addPlayer,
   createGame,
+  FULL_ROOM,
+  HAT_COUNT,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
   removePlayer,
+  SHIRT_COUNT,
+  START_COUNTDOWN_TICKS,
+  startRound,
   step,
   type GameState,
   type Inputs,
@@ -42,10 +48,13 @@ const ROOM = mapFromRows([
 ]);
 
 describe("createGame", () => {
-  it("places players at the centre of their spawn tile, at tick 0", () => {
+  it("places players at the centre of their spawn tile, at tick 0, in the lobby", () => {
     const game = createGame(ROOM, [{ id: "a", tileX: 3, tileY: 4 }]);
     expect(game.tick).toBe(0);
-    expect(player(game)).toEqual({ id: "a", x: 3500, y: 4500 });
+    expect(game.phase).toBe("lobby");
+    expect(game.countdown).toBeNull();
+    // No look given: hat 0, shirt 0.
+    expect(player(game)).toEqual({ id: "a", x: 3500, y: 4500, hat: 0, shirt: 0 });
   });
 
   it("refuses to spawn a player inside a wall", () => {
@@ -56,7 +65,7 @@ describe("createGame", () => {
 describe("addPlayer", () => {
   it("puts a newcomer on the spawn tile if it's free", () => {
     const game = addPlayer(createGame(ROOM, []), { id: "p1", tileX: 5, tileY: 5 });
-    expect(player(game, "p1")).toEqual({ id: "p1", x: 5500, y: 5500 });
+    expect(player(game, "p1")).toEqual({ id: "p1", x: 5500, y: 5500, hat: 0, shirt: 0 });
   });
 
   it("moves newcomers to a free neighbouring tile so nobody stands on someone else", () => {
@@ -265,5 +274,81 @@ describe("step: determinism and purity", () => {
   it("returns no events yet", () => {
     const start = createGame(ROOM, [{ id: "a", tileX: 5, tileY: 5 }]);
     expect(step(start, {}).events).toEqual([]);
+  });
+});
+
+describe("lobby: looks (S2-01)", () => {
+  const lobby = () => createGame(ROOM, [{ id: "a", tileX: 3, tileY: 3, shirt: 2 }]);
+
+  it("starts a player in the look their spawn asked for", () => {
+    expect(player(lobby())).toMatchObject({ hat: 0, shirt: 2 });
+    const joined = addPlayer(lobby(), { id: "b", tileX: 6, tileY: 6, hat: 1, shirt: 3 });
+    expect(player(joined, "b")).toMatchObject({ hat: 1, shirt: 3 });
+  });
+
+  it("changes hat and shirt from an input in the lobby, while still walking", () => {
+    const next = step(lobby(), { a: { ...hold({ right: true }), hat: 2, shirt: 5 } }).state;
+    expect(player(next)).toMatchObject({ x: 3500 + PLAYER_SPEED, hat: 2, shirt: 5 });
+  });
+
+  it("keeps the look when an input doesn't mention it", () => {
+    const changed = step(lobby(), { a: { ...NONE, hat: 1 } }).state;
+    const next = step(changed, { a: NONE }).state;
+    expect(player(next)).toMatchObject({ hat: 1, shirt: 2 });
+  });
+
+  it("ignores looks that are out of range or not whole numbers", () => {
+    for (const bad of [-1, HAT_COUNT, 1.5, NaN]) {
+      expect(player(step(lobby(), { a: { ...NONE, hat: bad } }).state).hat).toBe(0);
+    }
+    expect(player(step(lobby(), { a: { ...NONE, shirt: SHIRT_COUNT } }).state).shirt).toBe(2);
+  });
+
+  it("freezes looks once the round has started", () => {
+    const next = step(startRound(lobby()), { a: { ...hold({ down: true }), hat: 3 } }).state;
+    expect(player(next)).toMatchObject({ y: 3500 + PLAYER_SPEED, hat: 0 }); // moved, same hat
+  });
+});
+
+describe("lobby: starting the round (S2-01)", () => {
+  /** A lobby with `n` players on separate tiles. */
+  const lobbyOf = (n: number) =>
+    createGame(
+      ROOM,
+      Array.from({ length: n }, (_, i) => ({ id: `p${i}`, tileX: 2 + i * 2, tileY: 5 })),
+    );
+
+  it("starts the round when the host calls startRound, and only once", () => {
+    const started = startRound(lobbyOf(1));
+    expect(started.phase).toBe("round");
+    expect(startRound(started)).toBe(started); // already started: same state back
+  });
+
+  it("runs no countdown while the room isn't full", () => {
+    const state = run(lobbyOf(FULL_ROOM - 1), {}, 300);
+    expect(state.phase).toBe("lobby");
+    expect(state.countdown).toBeNull();
+  });
+
+  it("counts down 10 s once the room is full, then starts the round with an event", () => {
+    let state = step(lobbyOf(FULL_ROOM), {}).state;
+    expect(state.countdown).toBe(START_COUNTDOWN_TICKS - 1);
+    state = run(state, {}, START_COUNTDOWN_TICKS - 2);
+    expect(state.phase).toBe("lobby");
+    expect(state.countdown).toBe(1);
+    const last = step(state, {});
+    expect(last.state.phase).toBe("round");
+    expect(last.state.countdown).toBeNull();
+    expect(last.events).toEqual([{ type: "round_started" }]);
+    expect(START_COUNTDOWN_TICKS / TICKS_PER_SECOND).toBe(10);
+  });
+
+  it("stops the countdown when someone leaves, and starts over when the room fills again", () => {
+    const counting = run(lobbyOf(FULL_ROOM), {}, 100);
+    expect(counting.countdown).toBe(START_COUNTDOWN_TICKS - 100);
+    const left = step(removePlayer(counting, "p3"), {}).state;
+    expect(left.countdown).toBeNull();
+    const back = step(addPlayer(left, { id: "p3", tileX: 8, tileY: 8 }), {}).state;
+    expect(back.countdown).toBe(START_COUNTDOWN_TICKS - 1);
   });
 });
