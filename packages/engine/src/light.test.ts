@@ -38,18 +38,24 @@ describe("lineOfSight", () => {
 
 describe("inCone (35° either side, 5 tiles)", () => {
   it("lights what's straight ahead within range, not behind", () => {
-    expect(inCone(0, 0, 1, 0, 3000, 0)).toBe(true);
-    expect(inCone(0, 0, 1, 0, LIGHT_RANGE + 1, 0)).toBe(false);
-    expect(inCone(0, 0, 1, 0, -1000, 0)).toBe(false);
+    expect(inCone(0, 0, 0, 3000, 0)).toBe(true);
+    expect(inCone(0, 0, 0, LIGHT_RANGE + 1, 0)).toBe(false);
+    expect(inCone(0, 0, 0, -1000, 0)).toBe(false);
   });
 
   it("lights up to about 35° off the direction", () => {
-    expect(inCone(0, 0, 1, 0, 2000, 1300)).toBe(true); // 33°
-    expect(inCone(0, 0, 1, 0, 2000, 1500)).toBe(false); // 37°
+    expect(inCone(0, 0, 0, 2000, 1300)).toBe(true); // 33°
+    expect(inCone(0, 0, 0, 2000, 1500)).toBe(false); // 37°
+  });
+
+  it("works for any of the 32 aims", () => {
+    expect(inCone(0, 0, 8, 0, 3000)).toBe(true); // aim 8 = straight down
+    expect(inCone(0, 0, 2, 3000, 1300)).toBe(true); // aim 2 = 22.5°; the point is at 23°
+    expect(inCone(0, 0, 24, 0, 3000)).toBe(false); // aim 24 = up; the point is below
   });
 
   it("works on diagonals", () => {
-    expect(inCone(0, 0, 1, 1, 2000, 2000)).toBe(true); // straight down the diagonal
-    expect(inCone(0, 0, 1, 1, 3000, 0)).toBe(false); // 45° off
+    expect(inCone(0, 0, 4, 2000, 2000)).toBe(true); // straight down the diagonal
+    expect(inCone(0, 0, 4, 3000, 0)).toBe(false); // 45° off
   });
 });

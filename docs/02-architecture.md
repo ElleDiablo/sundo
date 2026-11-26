@@ -146,7 +146,7 @@ sequenceDiagram
 | `create_room` | host → server → host | `{}`; reply `{ type: "room_created", code }` (looks travel with `input` instead, S2-01) | once |
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right, hat?, shirt?, call? }` now (`light, baliktad, emote` later); a new hat or shirt counts as a change; the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?,face,light?,battery,bal?,cool?}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost, tikbalang{x,y,mode,faceX}?, caught{player,tick}?, barking[]? }` now; only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y,hat,shirt,emote?,aim,light?,battery,bal?,cool?}], acks[], ackTicks[], phase, countdown?, kids[{id,x,y,following?}], home[], dawn, timesLost, tikbalang{x,y,mode,faceX}?, caught{player,tick}?, barking[]? }` now; only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
@@ -198,13 +198,20 @@ with the same function. The host's "Back to the plaza" calls `returnToLobby()`, 
 everyone at the spawn (same rule as joining) and keeps the random generator going, so the next
 round hides the children somewhere new.
 
-**Darkness and the flashlight (S3-01):** Space adds `light` to the input. The engine keeps each
-player's facing (the way they last walked), whether the light is on and the battery (90 s; drains
-during the round, recharges 6× faster inside a safe zone). Safe zones are Tiled rectangles named
-`safe` (the kapilya plaza and the store); `light.ts` also has the cone test (35° either side, 5
-tiles, no trigonometry at run time) and line of sight, for the tikbalang. The client draws a
-darkness layer (a RenderTexture) and erases the safe zones, the map's lights, a glow around each
-tanod and each flashlight cone out of it every frame.
+**Darkness and the flashlight (S3-01, reworked in the look pass):** Space (or the left mouse
+button) adds `light` to the input, and once the mouse has moved over the game the input also
+carries `aim`: one of 32 directions (`aim.ts`, a table of whole-number vectors, so every machine
+agrees). Without a mouse the aim follows the walking keys. The engine keeps each player's aim,
+whether the light is on and the battery (90 s; drains during the round, recharges 6× faster inside
+a safe zone). Safe zones are Tiled rectangles named `safe` (the kapilya plaza and the store);
+`light.ts` also has the cone test (35° either side, 5 tiles, no trigonometry at run time) and line
+of sight, for the tikbalang. The client draws a light map (`lighting.ts`, a RenderTexture): filled
+with the phase's ambient colour (moonlight in the lobby, deep blue in the round), with the lamps,
+safe zones, tanod halos and flashlight cones added on top as soft coloured shapes, then multiplied
+over the world. During the round `weather.ts` adds rain, ripples on the water and lightning
+(a brief lift of the ambient colour, then thunder). Sounds are synthesized with Web Audio
+(`sounds.ts`): footsteps for every tanod and a sob from every lost child, quieter and panned by
+distance and direction, plus the rain and thunder.
 
 **The tikbalang (S3-02):** a state machine in the engine (`tikbalang.ts`): `wait` (10 s grace,
 5 s rest after a catch) → `patrol` between the map's `patrol` points → `stalk` a player it can see

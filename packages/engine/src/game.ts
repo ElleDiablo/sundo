@@ -21,6 +21,7 @@
 // Bring in helpers from map.ts. `type TileMap` imports only the type (erased when the code runs).
 import { isWall, tileOf, UNITS_PER_TILE, type TileMap } from "./map.ts";
 import { createDogs, updateDogs, type DogState } from "./dogs.ts";
+import { aimOfKeys, isAim } from "./aim.ts";
 import { inZone, type Zone } from "./light.ts";
 import { createRng, type Rng } from "./rng.ts";
 import { spawnTikbalang, updateTikbalang, type TikbalangState, type TikMode } from "./tikbalang.ts";
@@ -133,6 +134,9 @@ export interface PlayerInput extends MoveInput {
   readonly call?: boolean; // E held: call the nearest lost child in range (S2-03)
   readonly emote?: number; // 1–4 pressed: show emote 0 … EMOTE_COUNT - 1 (S2-06)
   readonly light?: boolean; // Space held: flashlight on, if the battery has any left (S3-01)
+  // Where the mouse points the flashlight (look pass): 0 … AIM_STEPS − 1 (aim.ts). Missing = the
+  // player steers with the keys, and the light points the way they walk.
+  readonly aim?: number;
   readonly baliktad?: boolean; // Q pressed: shirt inside out, if it's ready (S3-04)
 }
 
@@ -145,9 +149,9 @@ export interface PlayerState {
   readonly shirt: number; // which shirt colour (S2-01); only changes in the lobby
   readonly emote: number | null; // the emote showing over them (S2-06), or null for none
   readonly emoteAt: number | null; // the tick their last emote started, for its 2 s and the 1 s limit
-  // The way they last walked (S3-01): each −1, 0 or 1, never both 0. The flashlight points this way.
-  readonly faceX: number;
-  readonly faceY: number;
+  // Where their flashlight points (look pass, replacing S3-01's 8-way facing): 0 … AIM_STEPS − 1,
+  // 0 = right, clockwise (aim.ts). Follows the mouse if they use one, else the way they last walked.
+  readonly aim: number;
   readonly light: boolean; // flashlight on this tick (Space held and battery left)
   readonly battery: number; // ticks of light left, 0 … BATTERY_MAX
   readonly baliktad: number; // ticks left of being invisible to the tikbalang (S3-04); 0 = visible
@@ -356,8 +360,7 @@ export function kidHome(homes: readonly Spot[], kidId: string): Spot | undefined
 const NEW_PLAYER = {
   emote: null,
   emoteAt: null,
-  faceX: 0,
-  faceY: 1,
+  aim: 8, // pointing down (aim.ts: 8 of 32 steps = 90°, clockwise from right)
   light: false,
   battery: BATTERY_MAX,
   baliktad: 0, // S3-04: visible, and Q is ready
@@ -797,8 +800,9 @@ function updateBaliktad(
 
 // ─── The flashlight (private helper, S3-01) ──────────────────────────────────────────────────
 
-// Updates which way a player faces, whether their flashlight is on and their battery. Facing
-// follows the keys held (even into a wall: you can point at it). The light is on while Space is
+// Updates where a player's flashlight points, whether it's on, and their battery. The aim comes from
+// the mouse when the input carries one (look pass); otherwise it follows the keys held (even into a
+// wall: you can point at it), and stays put when no key is held. The light is on while Space is
 // held and there's battery; during a round it drains one tick per tick, except inside a safe zone,
 // where the battery recharges instead. Returns the same object when nothing changes.
 function updateLight(
@@ -809,8 +813,8 @@ function updateLight(
   const dirX = input ? Number(input.right) - Number(input.left) : 0;
   const dirY = input ? Number(input.down) - Number(input.up) : 0;
   const turned = dirX !== 0 || dirY !== 0;
-  const faceX = turned ? dirX : player.faceX;
-  const faceY = turned ? dirY : player.faceY;
+  // A valid mouse aim wins; then the walking keys; otherwise keep the old aim.
+  const aim = isAim(input?.aim) ? input.aim : turned ? aimOfKeys(dirX, dirY) : player.aim;
   const light = !!input?.light && player.battery > 0;
   let battery = player.battery;
   if (inZone(state.safeZones, player.x, player.y)) {
@@ -818,12 +822,8 @@ function updateLight(
   } else if (light && state.phase === "round") {
     battery -= 1;
   }
-  const same =
-    faceX === player.faceX &&
-    faceY === player.faceY &&
-    light === player.light &&
-    battery === player.battery;
-  return same ? player : { ...player, faceX, faceY, light, battery };
+  const same = aim === player.aim && light === player.light && battery === player.battery;
+  return same ? player : { ...player, aim, light, battery };
 }
 
 // ─── Emotes (private helper, S2-06) ──────────────────────────────────────────────────────────

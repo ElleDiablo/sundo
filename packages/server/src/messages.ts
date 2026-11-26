@@ -34,6 +34,8 @@ export interface InputFields {
   readonly light?: boolean;
   /** Q pressed: baliktad (S3-04). Only there while the key is (just) pressed. */
   readonly baliktad?: boolean;
+  /** Where the mouse points the flashlight, 0–31 (look pass, engine aim.ts). Missing = keys steer it. */
+  readonly aim?: number;
 }
 
 /** One player in a snapshot: position in engine units (1 tile = 1000), and looks (S2-01). */
@@ -45,8 +47,8 @@ export interface SnapshotPlayer {
   readonly shirt?: number;
   /** The emote showing over them (S2-06); missing when none is. */
   readonly emote?: number;
-  /** Which way they face (S3-01), packed into one number 0–8: (faceX + 1) × 3 + (faceY + 1). */
-  readonly face?: number;
+  /** Where their flashlight points (look pass, replacing S3-01's 8-way `face`): 0–31, engine aim.ts. */
+  readonly aim?: number;
   /** Flashlight on (S3-01); missing when off. */
   readonly light?: boolean;
   /** Ticks of flashlight battery left (S3-01). */
@@ -219,6 +221,12 @@ const MAX_COORD = 10_000_000;
 
 const isCount = (n: unknown): n is number =>
   typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+
+/**
+ * A flashlight aim (look pass): a whole number 0–31, one of the engine's 32 directions (engine
+ * aim.ts). Checked here rather than imported: the relay doesn't depend on the engine package.
+ */
+const isAim = (n: unknown): n is number => isCount(n) && n < 32;
 const isCoord = (n: unknown): n is number =>
   typeof n === "number" && Number.isSafeInteger(n) && Math.abs(n) <= MAX_COORD;
 /**
@@ -263,6 +271,11 @@ function readInput(v: Record<string, unknown>): InputFields | undefined {
     if (v[key] === undefined) continue;
     if (typeof v[key] !== "boolean") return undefined;
     input[key] = v[key];
+  }
+  // Look pass: the mouse aim, a whole number 0–31.
+  if (v.aim !== undefined) {
+    if (!isAim(v.aim)) return undefined;
+    input.aim = v.aim;
   }
   return input;
 }
@@ -325,11 +338,11 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     // Copy only the known fields: extra ones are dropped, not passed on.
     const player: { -readonly [K in keyof SnapshotPlayer]: SnapshotPlayer[K] } = { id, x, y };
     if (!copyLook(fields, player)) return undefined;
-    // S3-01: facing (0–8), flashlight on, battery ticks.
-    const { face, light, battery } = fields;
-    if (face !== undefined) {
-      if (!isCount(face) || face > 8) return undefined;
-      player.face = face;
+    // Look pass: aim (0–31). S3-01: flashlight on, battery ticks.
+    const { aim, light, battery } = fields;
+    if (aim !== undefined) {
+      if (!isAim(aim)) return undefined;
+      player.aim = aim;
     }
     if (light !== undefined) {
       if (typeof light !== "boolean") return undefined;

@@ -40,10 +40,16 @@
  * every browser shows the same timer and works out the same score (engine teamScore). The host's
  * "Back to the plaza" calls returnToLobby(), which puts everyone back at the spawn for another round.
  *
- * Darkness and the flashlight (S3-01): during the round a darkness layer (darkness.ts) covers
- * everything except the safe zones (the map's "safe" rectangles), the map's lights, a small glow
- * around each tanod and flashlight cones (Space; they point the way each tanod last walked). The
- * engine runs the battery; snapshots carry facing, light and battery; the HUD shows my battery.
+ * Light and the flashlight (S3-01, reworked in the look pass): a light map (lighting.ts) multiplies
+ * the world by a deep blue during the round, plus warm lamp light at the map's lights, a soft wash
+ * over the safe zones (the map's "safe" rectangles), a pale halo around each tanod and flashlight
+ * cones (Space or the left mouse button). The mouse aims the cone once it's moved over the game;
+ * without a mouse it points the way the tanod last walked. The engine runs the aim (32 steps) and
+ * the battery; snapshots carry aim, light and battery; the HUD shows my battery.
+ *
+ * The storm and sounds (look pass): rain, ripples on the water, lightning and thunder (weather.ts)
+ * during the round; footsteps for every tanod and sobbing from every lost child, quieter and
+ * panned left or right by where they are (sounds.ts).
  *
  * The tikbalang (S3-02): the host's engine runs it (tikbalang.ts in the engine); snapshots carry
  * where it is, its mode and facing, and guests slide it between snapshots like a player. It's drawn
@@ -74,7 +80,8 @@
  * Draw order (depth), bottom to top:
  *   0 ground · 1 decor · 2 objects (walls, trunks, fences) · 10 players
  *   20 above (roofs, canopies, bamboo tops: they hide players who walk behind them)
- *   30 night tint · 31 warm glows from doorways and windows
+ *   30 the light map (lighting.ts) · 30.4 rain ripples on the water · 30.5 rain
+ *   31 warm glows from doorways and windows
  */
 import Phaser from "phaser";
 import {
@@ -106,6 +113,7 @@ import {
   type TiledMap,
   type TileMap,
 } from "@sundo/engine";
+import { aimOfAngle, angleOfAim } from "@sundo/engine";
 import type {
   InputFields,
   SnapshotFields,
@@ -116,10 +124,11 @@ import { advance, createFixedStep, type FixedStep } from "./fixedStep.ts";
 import { InputSender } from "./inputSender.ts";
 import { SnapshotBuffer, TICKS_PER_SNAPSHOT } from "./interpolation.ts";
 import { KID_NAMES, kidRow } from "./kids.ts";
-import { Darkness, type Beam, type Glow } from "./darkness.ts";
+import { Lighting, type Beam, type Glow } from "./lighting.ts";
 import { EMOTE_HOLD_MS, emoteText } from "./emotes.ts";
 import { warning } from "./hoofbeats.ts";
-import { isMuted, playBark, playHoof } from "./sounds.ts";
+import { isMuted, playBark, playCry, playHoof, playStep } from "./sounds.ts";
+import { Weather } from "./weather.ts";
 import { defaultShirt, HATS, lookRow, SHIRTS, WALK_FRAMES } from "./looks.ts";
 import { INK, pixelTextStyle, placeCentred } from "./pixelText.ts";
 import { Predictor } from "./prediction.ts";
@@ -160,34 +169,51 @@ export interface RoundInfo {
 }
 export type OnRound = (info: RoundInfo) => void;
 
-/** Moonlit night: every colour is multiplied by this (lighting proper comes in S3-01). */
-const NIGHT_TINT = 0x9ea8d9;
-/**
- * Brownout (the round has started): a second multiply layer over the night one, making the world
- * ~30 % darker (measured on the plaza: 76,80,94 → 52,56,72) so the candles and doorways stand out
- * more. A separate layer switched on and off, so going back to the lobby later is one line.
- */
-const BROWNOUT_TINT = 0xb0b4c4;
-
 const DEPTH = {
   ground: 0,
   decor: 1,
   objects: 2,
   player: 10,
   above: 20,
-  night: 30,
-  dark: 30.5, // S3-01: the brownout's darkness, with the lights cut out
+  light: 30, // look pass: the light map (lighting.ts), multiplied over everything below
   glow: 31,
 };
 
 /**
- * How dark the darkness layer is in each phase (S3-01): none in the lobby, nearly black during the
- * round and its win screen, and much lighter once dawn has come.
+ * The ambient light in each phase (look pass): the colour the world is multiplied by where no lamp
+ * or flashlight reaches. Moonlight in the lobby; the brownout's deep blue during the round and its
+ * win screen (dark enough that the tikbalang is a shape at most, unless a light is on it); a grey
+ * pre-dawn once dawn has come.
  */
-const DARKNESS: Record<Phase, number> = { lobby: 0, round: 0.92, won: 0.92, lost: 0.4 };
-/** Light sizes in pixels (diameter): around each tanod, and the map's doorways / windows / candles. */
-const TANOD_GLOW = 40;
-const MAP_GLOW: Record<string, number> = { doorway: 56, window: 36, kapilya: 96, store: 96 };
+const AMBIENT: Record<Phase, number> = {
+  lobby: 0x9ea8d9,
+  round: 0x1e2848,
+  won: 0x1e2848,
+  lost: 0x8a88a6,
+};
+/** The halo around each tanod: diameter in pixels, colour and strength (a pale moonlit white). */
+const TANOD_GLOW = { size: 44, color: 0xdfe4ff, strength: 0.3 };
+/**
+ * The map's lights by name: diameter in pixels, colour, strength. Lamps and candles are a warm
+ * orange; the sari-sari store's bulb is a paler yellow (as in the art spike).
+ */
+const MAP_GLOW: Record<string, { size: number; color: number; strength: number }> = {
+  doorway: { size: 100, color: 0xff9a40, strength: 0.9 },
+  window: { size: 56, color: 0xff9a40, strength: 0.6 },
+  kapilya: { size: 150, color: 0xffa850, strength: 0.85 },
+  store: { size: 140, color: 0xffeba6, strength: 0.8 },
+};
+const DEFAULT_GLOW = { size: 60, color: 0xff9a40, strength: 0.7 };
+
+/** Look pass: a footstep every this many pixels walked (two frames of the walk cycle). */
+const STEP_PX = 10;
+/** Look pass: how loud my own footsteps are; other tanod's are quieter with distance. */
+const STEP_VOLUME = 0.05;
+/** Look pass: a lost child sobs every 3.5–6.5 s; heard up to 14 tiles away. */
+const CRY_VOLUME = 0.06;
+const CRY_RANGE_PX = 14 * 16;
+/** The ground-layer tile ids (Phaser's index = Tiled gid) that are water: paddies and the creek. */
+const WATER_TILES = new Set([10, 11, 12, 13]);
 
 /** Keep the walk animation going this long after a player last moved, so it doesn't flicker. */
 const WALK_HOLD_MS = 120;
@@ -216,9 +242,8 @@ type DrawnPlayer =
   | SnapshotPlayer
   | (Omit<SnapshotPlayer, "emote" | "light"> & {
       emote: number | null;
-      // From the engine (host, or my own prediction): facing as two numbers (S3-01).
-      faceX?: number;
-      faceY?: number;
+      // From the engine (host, or my own prediction): where the flashlight points (look pass).
+      aim?: number;
       light?: boolean;
       baliktad?: number; // S3-04: ticks left in baliktad
     });
@@ -229,14 +254,16 @@ function inBaliktad(p: DrawnPlayer): boolean {
   return "bal" in p && (p.bal ?? 0) > 0;
 }
 
-/** A snapshot's packed facing (0–8) → faceX, faceY (each −1, 0 or 1). Missing → facing down. */
-function unpackFace(face: number | undefined): { faceX: number; faceY: number } {
-  if (face === undefined) return { faceX: 0, faceY: 1 };
-  return { faceX: Math.floor(face / 3) - 1, faceY: (face % 3) - 1 };
+/**
+ * Turns angle `from` towards `to` (radians) by `amount` (0–1) the short way round, so a beam
+ * pointing at 350° that should point at 10° turns 20° clockwise, not 340° back.
+ */
+function turnTowards(from: number, to: number, amount: number): number {
+  let d = (to - from) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return from + d * amount;
 }
-
-/** faceX, faceY → the snapshot's packed facing, 0–8. */
-const packFace = (faceX: number, faceY: number) => (faceX + 1) * 3 + (faceY + 1);
 
 export class WorldScene extends Phaser.Scene {
   private state!: GameState; // the engine's current state
@@ -260,6 +287,15 @@ export class WorldScene extends Phaser.Scene {
   private emoteKey: { emote: number; until: number } | undefined;
   /** Until when a tap of Q stays in my input (S3-04; same reason as EMOTE_HOLD_MS). */
   private baliktadUntil = 0;
+  /**
+   * Look pass: the mouse aims my flashlight once it has moved over the game during the round;
+   * until then (or with no mouse) the light points the way I walk. `mouseAngle` = the exact angle
+   * from my tanod's chest to the pointer (radians), drawn as is; the engine gets it in 32 steps.
+   */
+  private mouseAim = false;
+  private mouseAngle = 0;
+  /** Look pass: each tanod's beam angle as drawn, turning smoothly towards their aim. */
+  private beamAngles = new Map<string, number>();
   /** The tikbalang (S3-02) and its eye glint (above the darkness); hidden outside the round. */
   private tikSprite!: Phaser.GameObjects.Sprite;
   private tikEye!: Phaser.GameObjects.Sprite;
@@ -291,14 +327,19 @@ export class WorldScene extends Phaser.Scene {
   /** Where each sprite was last drawn (units) and when it last moved: drives walking and facing. */
   private motion = new Map<string, { x: number; y: number; movedAt: number }>();
   private glows: Phaser.GameObjects.Image[] = [];
-  /** The darkness layer (S3-01) and the fixed lights cut out of it: the map's lights and safe zones. */
-  private darkness!: Darkness;
+  /** The light map (look pass, lighting.ts) and the fixed lights in it: the map's lights. */
+  private lighting!: Lighting;
+  /** The storm (look pass, weather.ts): rain, ripples, lightning and thunder. */
+  private weather!: Weather;
+  /** Look pass: pixels each player has walked since their last footstep sound. */
+  private stepDistance = new Map<string, number>();
+  /** Look pass: when (performance.now ms) each lost child sobs next. */
+  private nextCry = new Map<string, number>();
   private mapGlows: Glow[] = [];
   private safeZones: Zone[] = [];
   /** This frame's moving lights (each tanod's glow and flashlight), collected by draw(). */
   private tanodGlows: Glow[] = [];
   private beams: Beam[] = [];
-  private brownout!: Phaser.GameObjects.Rectangle; // extra darkness, shown once the round starts
   /** The hat and shirt I've picked (S2-01). Seat 0 until I join someone's room as a guest. */
   private look: Look = { hat: 0, shirt: defaultShirt(0) };
   /** Tells the page about the lobby; called only when the phase or the seconds left change. */
@@ -346,9 +387,7 @@ export class WorldScene extends Phaser.Scene {
     // hat + shirt combination (looks.ts), 24 rows.
     this.load.spritesheet("tanod", "assets/sprites/tanod.png", { frameWidth: 16, frameHeight: 28 });
     this.load.image("glow", "assets/sprites/glow.png");
-    // S3-01: white light shapes, erased out of the darkness (darkness.ts).
-    this.load.image("light", "assets/sprites/light.png");
-    this.load.image("cone", "assets/sprites/cone.png");
+    // (The light shapes are drawn in code at start-up: see lighting.ts.)
     // The lost children (S2-02): same frame size, one row per child (kids.ts), 4 walk frames.
     this.load.spritesheet("kids", "assets/sprites/kids.png", { frameWidth: 16, frameHeight: 28 });
     // The tikbalang (S3-02): 24 × 32 frames, 4-frame walk; and the same frames with only its eye.
@@ -367,6 +406,15 @@ export class WorldScene extends Phaser.Scene {
     for (const name of ["ground", "decor", "objects", "above"] as const) {
       map.createLayer(name, tiles)?.setDepth(DEPTH[name]);
     }
+    // Look pass: the storm. Ripples can open on every water tile of the ground layer; the rain
+    // and the ripples are drawn just above the light map, faintly, so they catch the eye in the dark.
+    const water: { x: number; y: number }[] = [];
+    map.getLayer("ground")?.data.forEach((row) =>
+      row.forEach((t) => {
+        if (WATER_TILES.has(t.index)) water.push({ x: t.pixelX, y: t.pixelY });
+      }),
+    );
+    this.weather = new Weather(this, water, DEPTH.light + 0.5, DEPTH.light + 0.4);
 
     // 2. Give the SAME file to the engine, which only cares which tiles are walls.
     const tiled = this.cache.tilemap.get("barangay").data as TiledMap;
@@ -457,33 +505,21 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(DEPTH.glow + 3);
     this.draw(this.state.players, 0);
 
-    // 4. Night: multiply the whole screen by a cool moonlight colour, then add warm glows on top
-    //    where the map's "lights" layer has a point (doorways, windows, the store's candle).
-    const { width, height } = this.scale;
-    this.add
-      .rectangle(0, 0, width, height, NIGHT_TINT)
-      .setOrigin(0)
-      .setScrollFactor(0) // stays put while the camera moves
-      .setDepth(DEPTH.night)
-      .setBlendMode(Phaser.BlendModes.MULTIPLY);
-    this.brownout = this.add
-      .rectangle(0, 0, width, height, BROWNOUT_TINT)
-      .setOrigin(0)
-      .setScrollFactor(0)
-      .setDepth(DEPTH.night)
-      .setBlendMode(Phaser.BlendModes.MULTIPLY)
-      .setVisible(false); // switched on when the round starts (reportLobby)
-    // S3-01: the brownout's darkness, between the night tint and the warm glows.
-    this.darkness = new Darkness(this, DEPTH.dark);
+    // 4. Night (look pass): the light map multiplies the world by the ambient colour plus every
+    //    light (lighting.ts). The map's "lights" layer has a point at each doorway, window and
+    //    candle; each becomes a warm light in the light map, plus a faint glow image drawn ADDed
+    //    on top, so the lamp itself seems to shine.
+    this.lighting = new Lighting(this, DEPTH.light);
     for (const light of map.getObjectLayer("lights")?.objects ?? []) {
-      this.mapGlows.push({ x: light.x ?? 0, y: light.y ?? 0, size: MAP_GLOW[light.name] ?? 48 });
+      const kind = MAP_GLOW[light.name] ?? DEFAULT_GLOW;
+      this.mapGlows.push({ x: light.x ?? 0, y: light.y ?? 0, ...kind });
       this.glows.push(
         this.add
           .image(light.x ?? 0, light.y ?? 0, "glow")
           .setDepth(DEPTH.glow)
           .setBlendMode(Phaser.BlendModes.ADD)
           .setScale(light.name === "window" ? 0.6 : 1)
-          .setAlpha(0.45),
+          .setAlpha(0.3),
       );
     }
 
@@ -504,6 +540,10 @@ export class WorldScene extends Phaser.Scene {
     // SPACE: the flashlight (S3-01).
     // Q: baliktad (S3-04).
     this.keys = keyboard.addKeys("W,A,S,D,UP,DOWN,LEFT,RIGHT,E,ONE,TWO,THREE,FOUR,SPACE,Q") as Keys;
+    // Look pass: moving the mouse over the game hands the flashlight's aim to the mouse.
+    this.input.on("pointermove", () => {
+      if (this.controlsOn) this.mouseAim = true;
+    });
     this.keys.Q.on("down", () => {
       if (this.controlsOn) this.baliktadUntil = performance.now() + EMOTE_HOLD_MS;
     });
@@ -675,9 +715,9 @@ export class WorldScene extends Phaser.Scene {
     else this.updateHost(delta, now);
     this.reportLobby();
     this.reportRound();
-    this.drawDarkness();
+    this.drawLight(time, delta);
     // Candles flicker a little (each one slightly out of step with the others).
-    this.glows.forEach((g, i) => g.setAlpha(0.42 + 0.05 * Math.sin(time * 0.009 + i * 1.7)));
+    this.glows.forEach((g, i) => g.setAlpha(0.27 + 0.04 * Math.sin(time * 0.009 + i * 1.7)));
   }
 
   /** Host (or alone): run the engine on everyone's keys; send a snapshot every tick (TICKS_PER_SNAPSHOT). */
@@ -744,29 +784,16 @@ export class WorldScene extends Phaser.Scene {
     const snapshot: SnapshotFields = {
       tick,
       // The emote only while one is showing (S2-06), like a child's `following`.
-      // S3-01: facing packed into one number, the light only while on, and the battery.
+      // Look pass: the aim (0–31). S3-01: the light only while on, and the battery.
       players: this.state.players.map(
-        ({
-          id,
-          x,
-          y,
-          hat,
-          shirt,
-          emote,
-          faceX,
-          faceY,
-          light,
-          battery,
-          baliktad,
-          baliktadCooldown,
-        }) => ({
+        ({ id, x, y, hat, shirt, emote, aim, light, battery, baliktad, baliktadCooldown }) => ({
           id,
           x,
           y,
           hat,
           shirt,
           ...(emote === null ? {} : { emote }),
-          face: packFace(faceX, faceY),
+          aim,
           ...(light ? { light } : {}),
           battery,
           // S3-04: baliktad and its cooldown, only while they run.
@@ -901,7 +928,10 @@ export class WorldScene extends Phaser.Scene {
       left: k.A.isDown || k.LEFT.isDown,
       right: k.D.isDown || k.RIGHT.isDown,
       call: k.E.isDown, // S2-03: call the nearest lost child
-      light: k.SPACE.isDown, // S3-01: the flashlight
+      // S3-01: the flashlight, on Space or (look pass) while the left mouse button is held.
+      light: k.SPACE.isDown || (this.mouseAim && this.input.activePointer.leftButtonDown()),
+      // Look pass: where the mouse points the light, once the mouse has been used.
+      ...(this.mouseAim ? { aim: aimOfAngle(this.mouseAngle) } : {}),
       // S3-04: baliktad while Q is held, or for a moment after a quick tap.
       baliktad: k.Q.isDown || performance.now() < this.baliktadUntil,
       ...look,
@@ -930,18 +960,17 @@ export class WorldScene extends Phaser.Scene {
       ticks === undefined || ticks === null ? null : Math.ceil((ticks * TICK_MS) / 1000);
     const shown = this.shownLobby;
     if (phase === shown.phase && seconds === shown.seconds) return;
-    // The brownout lasts through the round and its win screen; at dawn (lost) the extra darkness
-    // lifts (S2-05).
-    this.brownout.setVisible(phase === "round" || phase === "won");
     this.shownLobby = { phase, seconds };
     this.onLobby?.(phase, seconds);
   }
 
   /**
-   * Redraws the brownout's darkness (S3-01) for the current phase: the map's fixed lights and safe
-   * zones, plus this frame's tanod glows and flashlight beams (collected by draw()).
+   * Redraws the night's light (look pass) for the current phase: the ambient colour, the map's
+   * lamps (flickering a little, each out of step with the others), the safe zones, and this frame's
+   * tanod halos and flashlight beams (collected by draw()). During the round it also runs the
+   * weather: rain all the time, and now and then a lightning flash followed by thunder.
    */
-  private drawDarkness(): void {
+  private drawLight(time: number, delta: number): void {
     const phase = this.guest ? (this.guest.buffer.latest?.phase ?? "lobby") : this.state.phase;
     const px = TILE_SIZE_PX;
     const areas = this.safeZones.map((z) => ({
@@ -950,10 +979,21 @@ export class WorldScene extends Phaser.Scene {
       width: z.width * px,
       height: z.height * px,
     }));
-    this.darkness.draw(
+    // Flicker: two sine waves at odd speeds, so it never looks like a regular pulse.
+    const lamps = this.mapGlows.map((g, i) => ({
+      ...g,
+      strength:
+        g.strength *
+        (0.88 + 0.08 * Math.sin(time * 0.0073 + i * 1.7) + 0.04 * Math.sin(time * 0.0171 + i)),
+    }));
+    const stormy = phase === "round" || phase === "won";
+    this.weather.update(delta / 1000, this.cameras.main, stormy, this.lighting);
+    this.lighting.draw(
       this.cameras.main,
-      DARKNESS[phase],
-      [...this.mapGlows, ...this.tanodGlows],
+      AMBIENT[phase],
+      phase !== "lobby", // dark corners only once the brownout has started
+      delta / 1000,
+      [...lamps, ...this.tanodGlows],
       this.beams,
       areas,
     );
@@ -1111,6 +1151,7 @@ export class WorldScene extends Phaser.Scene {
       // Lower on screen = nearer the viewer: draw players further down in front of the others.
       sprite.setDepth(DEPTH.player + y / 10_000);
 
+      this.footsteps(p, x, y); // before animate(), which records this frame's position
       this.animate(sprite, p, walkKey(row), row * WALK_FRAMES, now);
       // S3-04: in baliktad, faded and pale (the shirt's inside showing), for everyone to see.
       if (inBaliktad(p)) sprite.setAlpha(0.55).setTint(0xc8d0ff);
@@ -1119,14 +1160,22 @@ export class WorldScene extends Phaser.Scene {
 
       // S3-01: a small glow around every tanod, and their flashlight cone while it's on. The
       // cone starts at their chest (12 px above the feet) and points the way they face.
-      this.tanodGlows.push({ x, y: y - 10, size: TANOD_GLOW });
-      if (p.light) {
-        const { faceX, faceY } =
-          "faceX" in p && p.faceX !== undefined
-            ? { faceX: p.faceX, faceY: p.faceY ?? 1 }
-            : unpackFace("face" in p ? p.face : undefined);
-        this.beams.push({ x, y: y - 12, angle: Math.atan2(faceY, faceX) });
+      this.tanodGlows.push({ x, y: y - 10, ...TANOD_GLOW });
+      // Look pass: where the pointer is in the world right now (the camera may have moved since
+      // the mouse did, so it's worked out again every frame), as an angle from my chest.
+      if (p.id === this.localId && this.mouseAim) {
+        const pointer = this.input.activePointer.positionToCamera(this.cameras.main);
+        const { x: mx, y: my } = pointer as Phaser.Math.Vector2;
+        this.mouseAngle = Math.atan2(my - (y - 12), mx - x);
       }
+      // My own beam follows the mouse exactly; everyone else's turns smoothly
+      // towards their aim (it arrives in 32 steps, ~20 times a second).
+      const target =
+        p.id === this.localId && this.mouseAim ? this.mouseAngle : angleOfAim(p.aim ?? 8);
+      const old = this.beamAngles.get(p.id);
+      const angle = old === undefined ? target : turnTowards(old, target, 0.35);
+      this.beamAngles.set(p.id, angle);
+      if (p.light) this.beams.push({ x, y: y - 12, angle });
     }
   }
 
@@ -1177,6 +1226,58 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
+   * Where a sound at (x, y) world pixels is heard from (look pass): the listener is the middle of
+   * the screen (the camera follows me). Returns the volume factor (1 right here, fading to 0 at
+   * `range` px, squared so far sounds drop off fast) and the stereo pan (−1 left … 1 right).
+   */
+  private hear(x: number, y: number, range: number): { near: number; pan: number } {
+    const view = this.cameras.main.worldView;
+    const dx = x - view.centerX;
+    const d = Math.hypot(dx, y - view.centerY);
+    return { near: Math.max(0, 1 - d / range) ** 2, pan: dx / (view.width / 2) };
+  }
+
+  /**
+   * Footsteps (look pass): adds how far player `p` moved since last frame (drawn at x, y px) and
+   * plays a step every STEP_PX. Mine at full volume; others quieter further away (silent past
+   * 12 tiles). A jump (respawn, back to the plaza) is not a walk, so it makes no sound.
+   */
+  private footsteps(p: DrawnPlayer, x: number, y: number): void {
+    const last = this.motion.get(p.id);
+    if (!last) return;
+    const moved = Math.abs(toPx(p.x) - toPx(last.x)) + Math.abs(toPx(p.y) - toPx(last.y));
+    if (moved > 32) return; // teleported, not walked
+    const walked = (this.stepDistance.get(p.id) ?? 0) + moved;
+    if (walked < STEP_PX) {
+      this.stepDistance.set(p.id, walked);
+      return;
+    }
+    this.stepDistance.set(p.id, walked - STEP_PX);
+    if (p.id === this.localId) playStep(STEP_VOLUME);
+    else {
+      const { near, pan } = this.hear(x, y, 12 * 16);
+      playStep(STEP_VOLUME * near, pan);
+    }
+  }
+
+  /**
+   * A lost child's crying (look pass): one sob every 3.5–6.5 s, quieter and panned by where they
+   * are. Each child's voice is pitched a little differently (by their sprite row).
+   */
+  private cry(id: string, row: number, x: number, y: number, now: number): void {
+    const next = this.nextCry.get(id);
+    if (next === undefined) {
+      // First seen: start at a random point, so the children don't all sob together.
+      this.nextCry.set(id, now + Math.random() * 4000);
+      return;
+    }
+    if (now < next) return;
+    this.nextCry.set(id, now + 3500 + Math.random() * 3000);
+    const { near, pan } = this.hear(x, y, CRY_RANGE_PX);
+    playCry(CRY_VOLUME * near, pan, 0.92 + 0.05 * row);
+  }
+
+  /**
    * Draws the lost children (S2-02) at these positions (engine units), and nobody else: adds a
    * sprite for each new child, removes ones no longer listed, walks or idles each one (S2-03).
    * Also places the call hint over the nearest lost child within reach of `me`, and emits the
@@ -1211,6 +1312,9 @@ export class WorldScene extends Phaser.Scene {
       sprite.setDepth(DEPTH.player + y / 10_000);
       const row = kidRow(kid.id);
       this.animate(sprite, kid, kidWalkKey(row), row * WALK_FRAMES, now);
+      // Look pass: a lost child cries now and then, so they can be found by ear in the dark.
+      if (kid.following === null) this.cry(kid.id, row, x, y, now);
+      else this.nextCry.delete(kid.id);
     }
 
     // The hint: the nearest lost child within CALL_RANGE of me (the same test the engine uses).
