@@ -230,4 +230,12 @@ describe("input and snapshot messages", () => {
       expect(readSnapshotBody(JSON.stringify({ ...snapshot, tikbalang: bad }))).toBeUndefined();
     }
   });
+
+  it("passes on the last catch (S3-03), refusing a bad one", () => {
+    const caught = { ...snapshot, caught: { player: "p1", tick: 812 } };
+    expect(readSnapshotBody(JSON.stringify(caught))).toEqual(caught);
+    for (const bad of [{ player: 3, tick: 1 }, { player: "p1", tick: -1 }, "p1"]) {
+      expect(readSnapshotBody(JSON.stringify({ ...snapshot, caught: bad }))).toBeUndefined();
+    }
+  });
 });

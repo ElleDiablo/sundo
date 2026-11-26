@@ -112,6 +112,8 @@ export interface SnapshotFields {
   readonly timesLost?: number;
   /** The tikbalang (S3-02); missing outside the round. */
   readonly tikbalang?: SnapshotTikbalang;
+  /** The last catch this round (S3-03): who, and on which tick, so each browser says "Naligaw!" once. */
+  readonly caught?: { readonly player: string; readonly tick: number };
 }
 
 /** Browser → relay. API Gateway picks the route from `action`. */
@@ -271,6 +273,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
     dawn,
     timesLost,
     tikbalang,
+    caught,
   } = v;
   if (!isCount(tick)) return undefined;
   if (!Array.isArray(players) || players.length > MAX_PLAYERS) return undefined;
@@ -287,6 +290,14 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (timesLost !== undefined && !isCount(timesLost)) return undefined;
   const checkedTik = tikbalang === undefined ? undefined : readTikbalang(tikbalang);
   if (tikbalang !== undefined && !checkedTik) return undefined;
+  // S3-03: { player, tick }, both checked; anything else in it is dropped.
+  let checkedCaught: SnapshotFields["caught"];
+  if (caught !== undefined) {
+    if (!caught || typeof caught !== "object") return undefined;
+    const { player, tick: at } = caught as Record<string, unknown>;
+    if (typeof player !== "string" || player.length > 8 || !isCount(at)) return undefined;
+    checkedCaught = { player, tick: at };
+  }
   const checkedKids = kids === undefined ? undefined : readKids(kids);
   if (kids !== undefined && !checkedKids) return undefined;
   // S2-04: a short list of short ids (the same limits as the kids themselves).
@@ -335,6 +346,7 @@ function readSnapshot(v: Record<string, unknown>): SnapshotFields | undefined {
   if (dawn !== undefined) snapshot.dawn = dawn;
   if (timesLost !== undefined) snapshot.timesLost = timesLost;
   if (checkedTik) snapshot.tikbalang = checkedTik;
+  if (checkedCaught) snapshot.caught = checkedCaught;
   return snapshot;
 }
 
