@@ -1,16 +1,21 @@
 /**
  * Tests for the game rules: creating a game, adding players, and step() (speed, walls, sliding,
  * determinism), plus the lobby (S2-01): looks, the host's Start and the full-room countdown, and
- * the lost children (S2-02): 5 of the map's hiding spots, chosen with the seeded generator.
+ * the lost children (S2-02): 5 of the map's hiding spots, chosen with the seeded generator, and
+ * escorting them (S2-03): calling with E, the trailing line, escort speed.
  * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
 import {
   addPlayer,
   createGame,
+  CALL_RANGE,
+  ESCORT_SPEED,
+  FOLLOW_GAP,
   FULL_ROOM,
   HAT_COUNT,
   KID_COUNT,
+  MAX_ESCORT,
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
@@ -409,5 +414,110 @@ describe("lost children (S2-02)", () => {
 
   it("refuses a hiding spot inside a wall", () => {
     expect(() => createGame(ROOM, [], { kidSpots: [{ tileX: 0, tileY: 0 }] })).toThrow(/wall/);
+  });
+});
+
+describe("escorting children (S2-03)", () => {
+  // A started round in the 12 × 12 room with kids placed by hand: k0 next to the player,
+  // k1 a little further, k2 far away.
+  const round = (kids: [number, number][], players = [{ id: "p0", tileX: 5, tileY: 5 }]) => ({
+    ...startRound(createGame(ROOM, players)),
+    kids: kids.map(([x, y], i) => ({ id: `k${i}`, x, y, following: null })),
+  });
+  const E = { ...NONE, call: true };
+  const kid = (state: GameState, id: string) => state.kids.find((k) => k.id === id)!;
+
+  it("calls the nearest lost child within 1.5 tiles when E is held, with an event", () => {
+    const start = round([
+      [5500 + 1000, 5500], // 1 tile away
+      [5500 + 1400, 5500], // 1.4 tiles: also in range, but further
+    ]);
+    const { state, events } = step(start, { p0: E });
+    expect(kid(state, "k0").following).toBe("p0");
+    expect(kid(state, "k1").following).toBeNull();
+    expect(events).toEqual([{ type: "kid_called", kid: "k0", player: "p0" }]);
+  });
+
+  it("ignores E when no child is in range, and children who are already following", () => {
+    const far = round([[5500 + CALL_RANGE + 1, 5500]]);
+    expect(step(far, { p0: E }).state.kids[0]!.following).toBeNull();
+    const taken = step(round([[6500, 5500]]), { p0: E }).state;
+    expect(step(taken, { p0: E }).events).toEqual([]); // nothing new to call
+  });
+
+  it("leads at most 2: holding E calls one child a tick, then stops", () => {
+    let state: GameState = round([
+      [6000, 5500],
+      [5000, 5500],
+      [5500, 6200],
+    ]);
+    state = run(state, { p0: E }, 5);
+    expect(state.kids.filter((k) => k.following === "p0")).toHaveLength(MAX_ESCORT);
+    expect(state.kids.filter((k) => k.following === null)).toHaveLength(1);
+  });
+
+  it("walks at escort speed (2.5 tiles/s) while leading a child", () => {
+    const leading = step(round([[5500, 6300]]), { p0: E }).state;
+    const moved = step(leading, { p0: hold({ right: true }) }).state;
+    expect(player(moved, "p0").x - player(leading, "p0").x).toBe(ESCORT_SPEED);
+    expect(ESCORT_SPEED * TICKS_PER_SECOND).toBe(2500); // 2.5 tiles a second
+  });
+
+  it("keeps children in a line behind the player, about FOLLOW_GAP apart", () => {
+    let state: GameState = round([
+      [6000, 5500],
+      [5000, 5500],
+    ]);
+    state = run(state, { p0: E }, 2); // both following: k0 first, then k1
+    expect(state.kids.map((k) => k.id)).toEqual(["k0", "k1"]); // line order
+    state = run(state, { p0: hold({ down: true }) }, 30); // walk down 3.75 tiles
+    const p = player(state, "p0");
+    const first = kid(state, "k0");
+    const second = kid(state, "k1");
+    const gap = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+      Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+    expect(gap(p, first)).toBeLessThanOrEqual(FOLLOW_GAP + 1);
+    expect(gap(first, second)).toBeLessThanOrEqual(FOLLOW_GAP + 1);
+    expect(first.y).toBeLessThan(p.y); // behind (above) the player, who walked down
+    expect(second.y).toBeLessThan(first.y);
+  });
+
+  it("doesn't let a following child walk through walls", () => {
+    let state: GameState = round([[5500, 4500]]); // k0 one tile above the player
+    state = step(state, { p0: E }).state;
+    state = run(state, { p0: hold({ up: true }) }, 80); // walk into the top wall and stay
+    for (const k of state.kids) expect(k.y).toBeGreaterThanOrEqual(1300); // never in row 0
+  });
+
+  it("gives the first player in order a child both reach for", () => {
+    const players = [
+      { id: "p0", tileX: 4, tileY: 5 },
+      { id: "p1", tileX: 6, tileY: 5 },
+    ];
+    const state = step(round([[5500, 5500]], players), { p0: E, p1: E }).state;
+    expect(state.kids[0]!.following).toBe("p0");
+  });
+
+  it("leaves children lost where they stand when their player leaves", () => {
+    const state = step(round([[6500, 5500]]), { p0: E }).state;
+    const left = removePlayer(state, "p0");
+    expect(left.kids[0]).toEqual({ ...state.kids[0], following: null });
+  });
+
+  it("is deterministic: the same inputs give the same line", () => {
+    const go = () =>
+      run(
+        run(
+          round([
+            [6000, 5500],
+            [5000, 5500],
+          ]),
+          { p0: E },
+          2,
+        ),
+        { p0: hold({ down: true, right: true }) },
+        25,
+      );
+    expect(go().kids).toEqual(go().kids);
   });
 });
