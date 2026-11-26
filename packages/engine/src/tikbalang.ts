@@ -19,6 +19,9 @@
  *   stalk   follows a player it can see, staying about 4 tiles away
  *   chase   runs straight at them (path-finding around walls); within 0.7 tiles = caught
  *
+ * It can never see a player in baliktad (S3-04: shirt inside out); if that's who it was stalking or
+ * chasing, it loses them at once and goes back to patrolling.
+ *
  * What it can see: a player within 5 tiles (9 if their flashlight is on: the light gives them
  * away), with no wall in between, and NOT inside a safe zone. It never walks into a safe zone
  * either (path-finding treats safe tiles as walls). A flashlight shone at it (inside someone's
@@ -105,6 +108,7 @@ export function spawnTikbalang(spot: Spot): TikbalangState {
 
 /** Can the tikbalang see this player? (In range for their light, outside safe zones, no wall between.) */
 export function canSee(t: TikbalangState, p: PlayerState, world: TikWorld): boolean {
+  if (p.baliktad > 0) return false; // S3-04: shirt inside out
   if (inZone(world.safeZones, p.x, p.y)) return false;
   const range = p.light ? SIGHT_LIT : SIGHT_DARK;
   if (dist2(t, p) > range * range) return false;
@@ -175,7 +179,8 @@ export function updateTikbalang(
     }
 
     case "stalk": {
-      if (!target) return still(toPatrol(t, rng, world)); // they left the room
+      // They left the room, or turned their shirt inside out (S3-04): gone.
+      if (!target || target.baliktad > 0) return still(toPatrol(t, rng, world));
       const sees = canSee(t, target, world);
       const unseen = sees ? 0 : t.unseen + 1;
       if (unseen >= LOSE_SIGHT_TICKS) return still(toPatrol(t, rng, world));
@@ -197,7 +202,7 @@ export function updateTikbalang(
     }
 
     case "chase": {
-      if (!target) return still(toPatrol(t, rng, world));
+      if (!target || target.baliktad > 0) return still(toPatrol(t, rng, world));
       const unseen = canSee(t, target, world) ? 0 : t.unseen + 1;
       if (unseen >= LOSE_SIGHT_TICKS) return still(toPatrol(t, rng, world));
       const moved = walk({ ...t, unseen }, target, speed, world);

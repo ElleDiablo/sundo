@@ -88,6 +88,8 @@ describe("createGame", () => {
       faceY: 1,
       light: false,
       battery: BATTERY_MAX,
+      baliktad: 0,
+      baliktadCooldown: 0,
     });
   });
 
@@ -111,6 +113,8 @@ describe("addPlayer", () => {
       faceY: 1,
       light: false,
       battery: BATTERY_MAX,
+      baliktad: 0,
+      baliktadCooldown: 0,
     });
   });
 
