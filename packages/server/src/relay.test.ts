@@ -29,6 +29,35 @@ const join = (d: RelayDeps, connectionId: string, code: string) =>
   handleRoute("join_room", connectionId, JSON.stringify({ action: "join_room", code }), d);
 
 describe("relay", () => {
+  it("a guest's tab closing frees their seat and tells only the host (S1-06)", async () => {
+    const d = deps();
+    await handleRoute("create_room", "host", undefined, d);
+    await join(d, "g1", "BAHO");
+    await join(d, "g2", "BAHO");
+    d.sent.length = 0;
+    await handleRoute("$disconnect", "g1", undefined, d);
+    expect(d.sent).toEqual([["host", { type: "player_left", seat: 1 }]]);
+    expect(d.store.items.has("ROOM#BAHO|SEAT#1")).toBe(false);
+  });
+
+  it("the host's tab closing ends the room for every guest (S1-06)", async () => {
+    const d = deps();
+    await handleRoute("create_room", "host", undefined, d);
+    await join(d, "g1", "BAHO");
+    await join(d, "g2", "BAHO");
+    d.sent.length = 0;
+    await handleRoute("$disconnect", "host", undefined, d);
+    expect(d.sent).toEqual([
+      ["g1", { type: "host_left" }],
+      ["g2", { type: "host_left" }],
+    ]);
+    d.sent.length = 0;
+    await join(d, "late", "BAHO");
+    expect(d.sent).toEqual([
+      ["late", expect.objectContaining({ type: "join_error", reason: "ended" })],
+    ]);
+  });
+
   it("accepts connections and disconnections", async () => {
     const d = deps();
     expect(await handleRoute("$connect", "c1", undefined, d)).toEqual({ statusCode: 200 });

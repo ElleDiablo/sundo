@@ -12,7 +12,7 @@
  *
  * Only items that were FOUND are kept (a connection not in a room yet may join one a moment later),
  * and each is forgotten after a few minutes so the cache can never be wrong for long, for example
- * once leaving rooms (S1-06) deletes them. Everything else goes straight to the real store.
+ * after leaving a room (S1-06) deletes them in another container. Everything else goes straight to the real store.
  */
 import type { Item, Key, RoomStore, TransactResult, WriteOp } from "./rooms.ts";
 
@@ -52,6 +52,13 @@ export class CachedStore implements RoomStore {
   }
 
   transact(ops: readonly WriteOp[]): Promise<TransactResult> {
+    // Anything this container writes or deletes may no longer match what it remembered: forget it.
+    // (Other containers can't be told; their copies expire within CACHE_TTL_MS. The checks that
+    // matter, like "is the host still in the room?", run inside transactions and are never cached.)
+    for (const op of ops) {
+      const key = op.kind === "put" ? op.item : op.key;
+      this.cache.delete(`${key.PK}|${key.SK}`);
+    }
     return this.inner.transact(ops);
   }
 

@@ -152,6 +152,15 @@ export function addPlayer(state: GameState, spawn: PlayerSpawn): GameState {
   throw new RangeError(`no free tile near (${spawn.tileX}, ${spawn.tileY}) for player ${spawn.id}`);
 }
 
+// Takes a player out of a running game (they closed their tab, S1-06). Returns a NEW state.
+// Removing someone who isn't in the game changes nothing.
+export function removePlayer(state: GameState, id: string): GameState {
+  // Not here (e.g. a repeated "player_left" message): keep the state as it is.
+  if (!state.players.some((p) => p.id === id)) return state;
+  // .filter() builds a new array with everyone except them; the order of the rest is unchanged.
+  return { ...state, players: state.players.filter((p) => p.id !== id) };
+}
+
 // Advances the game by exactly one tick (50 ms of game time).
 // It never edits `state`: it builds a new state and returns it, so the old one stays valid.
 // That's what lets tests compare "before" and "after", and lets a round be replayed exactly.

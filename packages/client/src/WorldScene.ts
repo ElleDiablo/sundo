@@ -24,6 +24,7 @@ import Phaser from "phaser";
 import {
   addPlayer,
   createGame,
+  removePlayer,
   findTiledPoint,
   mapFromTiled,
   step,
@@ -74,6 +75,11 @@ export class WorldScene extends Phaser.Scene {
   private previous!: GameState; // the state one tick ago, for smooth drawing between ticks
   private clock!: FixedStep;
   private keys!: Keys;
+  /**
+   * Off while the lobby menu is open: the world runs behind the menu, but my tanod mustn't walk
+   * until I press "Start walking" (enableControls). Keys pressed on the menu are ignored.
+   */
+  private controlsOn = false;
   private spawn!: { tileX: number; tileY: number }; // the map's "player" spawn point
   private map!: TileMap; // which tiles are walls (the engine's view of the map)
   /** Which player this browser controls. Starts as the host; a guest becomes their seat. */
@@ -206,6 +212,15 @@ export class WorldScene extends Phaser.Scene {
   addRemotePlayer(seat: number): void {
     this.state = addPlayer(this.state, { id: playerId(seat), ...this.spawn });
     this.previous = this.state;
+  }
+
+  /** A guest left my room (I'm the host): take their player out, and forget their keys. */
+  removeRemotePlayer(seat: number): void {
+    this.state = removePlayer(this.state, playerId(seat));
+    this.previous = this.state;
+    this.remote.delete(seat);
+    this.remoteTicks.delete(seat);
+    // Their sprite goes on the next draw(), which only draws players still in the state.
   }
 
   /** A guest's keys arrived (I'm the host). Kept until newer ones come; late, older ones are ignored. */
@@ -345,7 +360,14 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
+  /** The lobby closed ("Start walking"): from now on my keys move my tanod. */
+  enableControls(): void {
+    this.input.keyboard?.resetKeys(); // forget anything pressed while the menu was open
+    this.controlsOn = true;
+  }
+
   private readInput(): MoveInput {
+    if (!this.controlsOn) return { up: false, down: false, left: false, right: false };
     const k = this.keys;
     return {
       up: k.W.isDown || k.UP.isDown,

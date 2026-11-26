@@ -27,6 +27,7 @@ export {
   PLAYER_DIAGONAL_SPEED,
   PLAYER_HALF_SIZE,
   PLAYER_SPEED,
+  removePlayer,
   step,
   type GameEvent,
   type GameState,

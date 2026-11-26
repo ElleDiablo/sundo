@@ -3,7 +3,9 @@
  *
  * API Gateway keeps one WebSocket open per browser and calls the Lambda for each event:
  *   $connect     a browser opened the socket          → accept
- *   $disconnect  it closed (tab closed, network lost) → nothing yet (S1-06 removes the player)
+ *   $disconnect  it closed (tab closed, reloaded, network lost) → leave the room (S1-06): a guest
+ *                frees their seat and the host gets player_left; the host leaving ends the room
+ *                and every guest gets host_left
  *   create_room  {"action":"create_room"}             → make a room; host gets room_created
  *   join_room    {"action":"join_room","code":"BAHO"} → take a seat; guest gets room_joined,
  *                                                       host gets player_joined
@@ -22,6 +24,7 @@ import {
   findHost,
   findMembership,
   joinRoom,
+  leaveRoom,
   RoomError,
   type RoomStore,
 } from "./rooms.ts";
@@ -58,8 +61,22 @@ export async function handleRoute(
 ): Promise<RelayResult> {
   switch (routeKey) {
     case "$connect":
-    case "$disconnect":
       return OK;
+
+    case "$disconnect": {
+      // Nobody can be answered here (the connection is already closed); only the others are told.
+      const left = await leaveRoom(deps.store, connectionId);
+      if (!left) return OK; // wasn't in a room
+      if (left.seat === 0) {
+        // The host ran the game. Without them the room is over: tell every guest.
+        const guests = await findGuests(deps.store, left.code);
+        await Promise.all(guests.map((guest) => trySend(deps, guest, { type: "host_left" })));
+      } else {
+        const host = await findHost(deps.store, left.code);
+        if (host) await trySend(deps, host, { type: "player_left", seat: left.seat });
+      }
+      return OK;
+    }
 
     case "create_room": {
       try {

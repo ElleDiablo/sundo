@@ -5,11 +5,17 @@
  *
  *   Create room  → shows the new code → "Start walking" closes the lobby
  *   Join with code → type 4 letters → "Join" → shows "You're player N" → "Start walking"
+ *
+ * Going back to the menu (the host left, S1-06) reloads the page: the simplest way to be sure no
+ * old room, socket or player is left behind. A note saved in sessionStorage (kept across a reload
+ * of this tab only) says why, and the lobby shows it once.
  */
 import { createRoom, joinRoom, loadConfig, type Room } from "./net.ts";
 
 /** Called once the player is in a room, as host (seat 0) or guest (seat 1–3). */
 export type OnRoom = (room: Room) => void;
+/** Called when the lobby closes ("Start walking"): the game may take the keyboard now. */
+export type OnEnter = () => void;
 
 /** Finds an element by id, or throws: a missing element is a bug in index.html. */
 function el<T extends HTMLElement>(id: string): T {
@@ -18,7 +24,7 @@ function el<T extends HTMLElement>(id: string): T {
   return found as T;
 }
 
-export function setupLobby(onRoom: OnRoom): void {
+export function setupLobby(onRoom: OnRoom, onEnter: OnEnter): void {
   const panel = el<HTMLElement>("lobby");
   const status = el<HTMLElement>("lobby-status");
   const codeBox = el<HTMLElement>("room-code");
@@ -31,6 +37,13 @@ export function setupLobby(onRoom: OnRoom): void {
 
   /** Shows a message under the buttons (also read out by screen readers: role="status"). */
   const say = (text: string) => (status.textContent = text);
+
+  // Back from a room that ended? Say why, once.
+  const notice = sessionStorage.getItem(NOTICE_KEY);
+  if (notice) {
+    say(notice);
+    sessionStorage.removeItem(NOTICE_KEY);
+  }
 
   /** The relay's address, or undefined (with a message shown) if multiplayer isn't set up. */
   async function relayUrl(): Promise<string | undefined> {
@@ -114,7 +127,17 @@ export function setupLobby(onRoom: OnRoom): void {
     panel.hidden = true;
     badge.hidden = false;
     document.querySelector<HTMLElement>("#game canvas")?.focus();
+    onEnter();
   });
+}
+
+/** Where the reason for going back to the menu waits during the reload. */
+const NOTICE_KEY = "sundo:lobby-notice";
+
+/** Leaves the room and goes back to the menu, which then shows `why`. */
+export function backToMenu(why: string): void {
+  sessionStorage.setItem(NOTICE_KEY, why);
+  location.reload(); // closing the page closes the socket; the relay cleans up on $disconnect
 }
 
 /** Shows a short message at the top of the screen for a few seconds (e.g. "Player 2 joined"). */

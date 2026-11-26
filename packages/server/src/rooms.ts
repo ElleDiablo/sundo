@@ -8,6 +8,10 @@
  *   ROOM#BAHO     CONN#<connId>    a player in the room and their seat
  *   CONN#<connId> ROOM             which room a connection is in (to clean up on disconnect)
  *
+ * Leaving (S1-06): when a connection closes, its own SEAT#n, ROOM#…/CONN#… and CONN#…/ROOM items are
+ * deleted. The room's META stays until its TTL, so a code whose host has left can be told apart
+ * from a code that never existed ("That room has ended" vs "No room with that code").
+ *
  * The keys match the only questions the relay asks: "who's in room X?" (query SEAT# items of ROOM#X),
  * "which room is connection Y in?" (get PK = CONN#Y) and "is seat N free?" (get SEAT#N).
  * That's how DynamoDB tables are designed: around the lookups, not around the data.
@@ -35,7 +39,13 @@ export type WriteOp =
   /** Write an item. With `onlyIfNew`, the whole transaction fails if those keys already exist. */
   | { readonly kind: "put"; readonly item: Item; readonly onlyIfNew?: boolean }
   /** Write nothing, but fail the whole transaction unless this item exists. */
-  | { readonly kind: "mustExist"; readonly key: Key };
+  | { readonly kind: "mustExist"; readonly key: Key }
+  /**
+   * Delete an item (deleting one that isn't there is fine). With `onlyIfConnId`, the whole
+   * transaction fails unless the item's `connId` is that value: a seat is only ever freed by the
+   * connection that holds it.
+   */
+  | { readonly kind: "delete"; readonly key: Key; readonly onlyIfConnId?: string };
 
 /** Result of a transaction: written, or not written because some steps' conditions failed. */
 export type TransactResult =
@@ -98,11 +108,12 @@ export async function createRoom(
 }
 
 /** Why joining (or creating) didn't work; each has a friendly message for the player. */
-export type RoomErrorReason = "bad_code" | "not_found" | "full" | "already_in_room";
+export type RoomErrorReason = "bad_code" | "not_found" | "ended" | "full" | "already_in_room";
 
 export const ROOM_ERROR_MESSAGES: Record<RoomErrorReason, string> = {
   bad_code: "Room codes are 4 letters, like BAHO.",
   not_found: "No room with that code. Check the letters with your host.",
+  ended: "That room has ended: the host left. Ask them for a new code.",
   full: "That room already has 4 players.",
   already_in_room: "You're already in a room.",
 };
@@ -150,12 +161,17 @@ export async function joinRoom(
     const result = await store.transact([
       // Step 0: the room must still exist (it may have expired since the read above).
       { kind: "mustExist", key: { PK: `ROOM#${code}`, SK: "META" } },
+      // Step 1: the host must still be in it. Only the host's browser runs the game, so a room
+      // without one is dead: joining it would show an empty world (S1-06). Checked inside the
+      // transaction, so it's always DynamoDB's current answer, never a cached one.
+      { kind: "mustExist", key: { PK: `ROOM#${code}`, SK: "SEAT#0" } },
       ...seatOps(code, seat, connectionId, "guest", joinedAt, ttl),
     ]);
     if (result.ok) return { code, seat, hostConnId };
     if (result.failed.includes(0)) throw new RoomError("not_found");
-    if (result.failed.includes(3)) throw new RoomError("already_in_room");
-    // Otherwise step 1 failed: this seat is taken. Try the next one.
+    if (result.failed.includes(1)) throw new RoomError("ended");
+    if (result.failed.includes(4)) throw new RoomError("already_in_room");
+    // Otherwise step 2 failed: this seat is taken. Try the next one.
   }
   throw new RoomError("full");
 }
@@ -189,6 +205,32 @@ function seatOps(
       item: { PK: `CONN#${connectionId}`, SK: "ROOM", room: code, seat, ttl },
     },
   ];
+}
+
+/**
+ * Takes a connection out of its room (its tab closed): frees its seat and deletes its two other
+ * items, all at once. Returns where it was, so the relay can tell the others, or undefined if it
+ * wasn't in a room (someone who opened the game and never created or joined one).
+ *
+ * A freed seat can be taken again: a guest who reloads and rejoins gets their seat back, and the
+ * host removes the old player first, so there's no ghost.
+ */
+export async function leaveRoom(
+  store: RoomStore,
+  connectionId: string,
+): Promise<Membership | undefined> {
+  const me = await findMembership(store, connectionId);
+  if (!me) return undefined;
+  await store.transact([
+    {
+      kind: "delete",
+      key: { PK: `ROOM#${me.code}`, SK: `SEAT#${me.seat}` },
+      onlyIfConnId: connectionId, // never free a seat someone else has taken since
+    },
+    { kind: "delete", key: { PK: `ROOM#${me.code}`, SK: `CONN#${connectionId}` } },
+    { kind: "delete", key: { PK: `CONN#${connectionId}`, SK: "ROOM" } },
+  ]);
+  return me;
 }
 
 /** Where a connection is: its room and seat, or undefined if it isn't in a room. */
