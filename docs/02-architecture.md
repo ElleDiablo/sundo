@@ -123,8 +123,8 @@ sequenceDiagram
         G->>L: input
         L->>H: postToConnection(input)
     end
-    loop every 100 ms
-        H->>H: engine.step() × 2 ticks
+    loop every 50 ms (every tick)
+        H->>H: engine.step()
         H->>G: {action:"snapshot", state}
         G->>L: snapshot
         L->>P: postToConnection(snapshot) to each other player
@@ -147,14 +147,22 @@ sequenceDiagram
 | `join_room` | guest → server | `{ code }`; replies `room_joined { code, seat }` to the guest, `player_joined { seat }` to the host, or `join_error { reason, message }` (reason `ended` once the host has left: the transaction checks that `SEAT#0` still exists) | once |
 | `join` | player → server → host | `{ room, name, hat, shirt }` | once |
 | `input` | guest → server → host | `{ seq, up, down, left, right }` now (`light, call, baliktad, emote` later); the relay looks up the sender's seat and forwards `input { seat, seq, … }` to the host | on change, ≤ 10/s, plus a 1 s keepalive |
-| `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[], ackTicks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 10/s (every 2nd tick) |
+| `snapshot` | host → server → guests | `{ tick, players[{id,x,y}], acks[], ackTicks[] }` now (`kids[], tikbalang, timeLeft` later); only accepted from seat 0; forwarded to every `SEAT#1–3` | 20/s (every tick; 10/s before NET-02) |
 | `event` | host → players | `{ type: "caught" \| "kid_home" \| "round_end", ... }` | as they happen |
 | `telemetry` | host → server | `{ matchId, events[] }` (max 200) | every 5 s |
 
-**Smoothing:** players see the world ~100 ms in the past and blend between the last two
-snapshots. That hides network jitter. It's the standard technique in multiplayer games
+**Smoothing:** players see the world one snapshot interval (~50 ms) in the past and blend
+between the two snapshots either side of that moment. That hides network jitter. It's the standard technique in multiplayer games
 (called **snapshot interpolation**). Snapshots are timed by their `tick` (tick × 50 ms of host
 game time), not by when they arrive; late or repeated ones are ignored.
+
+**Snapshot rate (NET-02):** the host sends a snapshot every tick (20/s) and guests draw 50 ms in
+the past. Sprint 1 sent every 2nd tick with a 100 ms buffer. Measured through the dev relay (two
+browsers, 40 trials each), other players now appear **~45 ms sooner** (median 107–123 ms, was
+147–171 ms). The cost is twice the snapshot messages, and frames where the next snapshot is late
+and players are held still for a moment went from ~22 % to ~29 %. A 100 ms buffer at 20/s halves
+those holds but gives back most of the gain, so the buffer is one constant
+(`INTERPOLATION_DELAY_MS`) to tune after playtests.
 
 **Prediction (NET-01):** a guest doesn't wait for the host to see their own player move. It runs
 the same deterministic engine on just its own player, with the same keys it sends, and draws that
