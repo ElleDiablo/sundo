@@ -1,7 +1,7 @@
 /**
  * Tests for client-side prediction: the guest moves at once, re-bases on the host's snapshots,
  * replays only what the host hasn't applied yet, and fades small corrections out. Since S2-03 it
- * also predicts calling a child with E and my line of followers.
+ * also predicts calling a child with E and my line of followers, but not once the round is over.
  */
 import { describe, expect, it } from "vitest";
 import { ESCORT_SPEED, mapFromRows, PLAYER_SPEED } from "@sundo/engine";
@@ -123,6 +123,19 @@ describe("Predictor", () => {
       ackSeq: 0,
       ackTicks: 0,
       kids: [{ id: "k0", x: 2500, y: 1500, following: "p2" }],
+    });
+    p.tick({ seq: 1, keys: { ...none, call: true } });
+    expect(p.myKids(1)).toEqual([]);
+  });
+
+  it("doesn't predict a call once the round has ended (S2-05)", () => {
+    const p = new Predictor(map, "p1");
+    p.reconcile({
+      ...start,
+      ackSeq: 0,
+      ackTicks: 0,
+      phase: "lost",
+      kids: [{ id: "k0", x: 2500, y: 1500, following: null }],
     });
     p.tick({ seq: 1, keys: { ...none, call: true } });
     expect(p.myKids(1)).toEqual([]);

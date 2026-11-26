@@ -29,7 +29,15 @@
  * doesn't depend on anyone else and can be computed alone. Other players are still drawn from
  * snapshot interpolation (interpolation.ts).
  */
-import { step, type GameState, type KidState, type PlayerInput, type TileMap } from "@sundo/engine";
+import {
+  ROUND_TICKS,
+  step,
+  type GameState,
+  type KidState,
+  type Phase,
+  type PlayerInput,
+  type TileMap,
+} from "@sundo/engine";
 
 /** The input in effect for one local tick: the keys AND the seq of the message that sent them. */
 export interface TickInput {
@@ -51,6 +59,11 @@ export interface HostView {
    * are predicted too: they react at once instead of a round trip later.
    */
   readonly kids?: readonly KidState[];
+  /**
+   * The snapshot's phase (S2-05). Once the round is over ("won" / "lost") E calls nobody, so the
+   * prediction mustn't either; otherwise it's predicted as a round (see reconcile).
+   */
+  readonly phase?: Phase;
 }
 
 /** Corrections fade out with this time constant: after 100 ms ~37 % is left, after 300 ms ~5 %. */
@@ -127,10 +140,14 @@ export class Predictor {
     //    pick or the host's snapshot), and in "round" step() ignores looks and runs no countdown.
     //    The children come along (S2-03): lost ones can be called, mine follow my predicted
     //    path, and ones following OTHER players stay put (their leader isn't in this game).
+    //    Once the round has ended, its phase instead, so a call isn't predicted (S2-05). The dawn
+    //    timer starts full: at most MAX_HISTORY (200) ticks are replayed, far fewer than 7200,
+    //    so the prediction never ends a round by itself.
+    const ended = host.phase === "won" || host.phase === "lost";
     let state: GameState = {
       tick: 0,
       map: this.map,
-      phase: "round",
+      phase: ended ? host.phase! : "round",
       countdown: null,
       rngState: 0,
       kidSpots: [],
@@ -139,6 +156,8 @@ export class Predictor {
       // snapshot (without that child) removes them from my line about one round trip later.
       homes: [],
       home: [],
+      dawn: ROUND_TICKS,
+      timesLost: 0,
       players: [{ id: this.id, x: host.x, y: host.y, hat: 0, shirt: 0 }],
     };
     let previous = state;
