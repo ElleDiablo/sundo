@@ -25,7 +25,7 @@ import { LatencyStats } from "./inputSender.ts";
 import { backToMenu, setBadgeDetail, setupLobby, toast } from "./lobby.ts";
 import { onServerMessage, send } from "./net.ts";
 import { setupResult } from "./result.ts";
-import { playDawn, playKidHome, playWin } from "./sounds.ts";
+import { playCaught, playDawn, playKidHome, playWin } from "./sounds.ts";
 import { setupWardrobe } from "./wardrobe.ts";
 import { WorldScene, type RoundInfo } from "./WorldScene.ts";
 
@@ -143,6 +143,17 @@ setupLobby(
       if (roundPhase === "round" && info.phase === "won") playWin();
       if (roundPhase === "round" && info.phase === "lost") playDawn();
       roundPhase = info.phase;
+    });
+    // S3-03: someone was caught by the tikbalang.
+    world.events.on("naligaw", (player: string, me: boolean) => {
+      playCaught(me);
+      const seat = Number(player.slice(1)) + 1;
+      toast(
+        me
+          ? "Naligaw! The tikbalang left you lost in the bamboo grove."
+          : `Player ${seat} naligaw! Their children ran off to hide.`,
+        4500,
+      );
     });
     world.events.on("kid_home", (name: string, { home, total }: RoundInfo) => {
       playKidHome();
