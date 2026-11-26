@@ -4,7 +4,8 @@
  * the lost children (S2-02): 5 of the map's hiding spots, chosen with the seeded generator, and
  * escorting them (S2-03): calling with E, the trailing line, escort speed, and taking them home
  * (S2-04): a following child at their own doorway goes inside, and the end of a round (S2-05):
- * the dawn timer, winning and losing, the team score and going back to the lobby.
+ * the dawn timer, winning and losing, the team score and going back to the lobby; and emotes
+ * (S2-06): shown for 2 s, at most one a second.
  * Small hand-drawn maps keep each case easy to picture.
  */
 import { describe, expect, it } from "vitest";
@@ -12,6 +13,9 @@ import {
   addPlayer,
   createGame,
   CALL_RANGE,
+  EMOTE_COOLDOWN_TICKS,
+  EMOTE_COUNT,
+  EMOTE_TICKS,
   ESCORT_SPEED,
   FOLLOW_GAP,
   FULL_ROOM,
@@ -69,7 +73,15 @@ describe("createGame", () => {
     expect(game.phase).toBe("lobby");
     expect(game.countdown).toBeNull();
     // No look given: hat 0, shirt 0.
-    expect(player(game)).toEqual({ id: "a", x: 3500, y: 4500, hat: 0, shirt: 0 });
+    expect(player(game)).toEqual({
+      id: "a",
+      x: 3500,
+      y: 4500,
+      hat: 0,
+      shirt: 0,
+      emote: null,
+      emoteAt: null,
+    });
   });
 
   it("refuses to spawn a player inside a wall", () => {
@@ -80,7 +92,15 @@ describe("createGame", () => {
 describe("addPlayer", () => {
   it("puts a newcomer on the spawn tile if it's free", () => {
     const game = addPlayer(createGame(ROOM, []), { id: "p1", tileX: 5, tileY: 5 });
-    expect(player(game, "p1")).toEqual({ id: "p1", x: 5500, y: 5500, hat: 0, shirt: 0 });
+    expect(player(game, "p1")).toEqual({
+      id: "p1",
+      x: 5500,
+      y: 5500,
+      hat: 0,
+      shirt: 0,
+      emote: null,
+      emoteAt: null,
+    });
   });
 
   it("moves newcomers to a free neighbouring tile so nobody stands on someone else", () => {
@@ -717,5 +737,64 @@ describe("dawn, winning and losing (S2-05)", () => {
     expect(again.dawn).toBe(ROUND_TICKS);
     expect(again.kids).toHaveLength(KID_COUNT);
     expect(again.kids.map((k) => k.x)).not.toEqual(first.kids.map((k) => k.x));
+  });
+});
+
+describe("emotes (S2-06)", () => {
+  const start = () => createGame(ROOM, [{ id: "p0", tileX: 5, tileY: 5 }]);
+  const say = (emote: number) => ({ p0: { ...NONE, emote } });
+
+  it("shows an emote at once, with an event", () => {
+    const { state, events } = step(start(), say(2));
+    expect(player(state, "p0")).toMatchObject({ emote: 2, emoteAt: 1 });
+    expect(events).toEqual([{ type: "emote", player: "p0", emote: 2 }]);
+  });
+
+  it("clears it after 2 s", () => {
+    let state = step(start(), say(0)).state;
+    state = run(state, {}, EMOTE_TICKS - 1);
+    expect(player(state, "p0").emote).toBe(0); // its 40th tick: still showing
+    state = run(state, {}, 1);
+    expect(player(state, "p0").emote).toBeNull();
+    expect(EMOTE_TICKS / TICKS_PER_SECOND).toBe(2);
+  });
+
+  it("allows at most one emote a second, even with different keys", () => {
+    let state = step(start(), say(0)).state;
+    const tooSoon = run(state, say(1), EMOTE_COOLDOWN_TICKS - 1);
+    expect(player(tooSoon, "p0").emote).toBe(0); // the second one was ignored
+    state = step(tooSoon, say(1)).state; // a full second after the first
+    expect(player(state, "p0")).toMatchObject({ emote: 1, emoteAt: EMOTE_COOLDOWN_TICKS + 1 });
+  });
+
+  it("repeats a held emote once a second, never faster", () => {
+    let events = 0;
+    let state = start();
+    for (let t = 0; t < 3 * TICKS_PER_SECOND; t++) {
+      const result = step(state, say(3));
+      state = result.state;
+      events += result.events.filter((e) => e.type === "emote").length;
+    }
+    expect(events).toBe(3);
+  });
+
+  it("ignores emotes out of range", () => {
+    for (const bad of [-1, EMOTE_COUNT, 1.5]) {
+      expect(player(step(start(), say(bad)).state, "p0").emote).toBeNull();
+    }
+  });
+
+  it("works in the lobby, the round and after it", () => {
+    const lobby = start();
+    const round = startRound(lobby);
+    const lost = { ...round, phase: "lost" as const };
+    for (const state of [lobby, round, lost]) {
+      expect(player(step(state, say(1)).state, "p0").emote).toBe(1);
+    }
+  });
+
+  it("doesn't stop the player walking", () => {
+    const state = step(start(), { p0: { ...NONE, right: true, emote: 0 } }).state;
+    expect(player(state, "p0").x).toBe(5500 + PLAYER_SPEED);
   });
 });
