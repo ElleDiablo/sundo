@@ -1,6 +1,7 @@
 /**
  * Tests for when a guest sends input (on change, ≤ 10/s, keepalive once a second; a new hat or
- * shirt counts as a change) and for measuring the round trip from the host's acks.
+ * shirt, E or an emote counts as a change; every field reaches the message) and for measuring the
+ * round trip from the host's acks.
  */
 import { describe, expect, it } from "vitest";
 import { InputSender, LatencyStats } from "./inputSender.ts";
@@ -38,6 +39,19 @@ describe("InputSender", () => {
       hat: 2,
       shirt: 1,
     });
+  });
+
+  it("sends an emote as a change, and its end as another (S2-06)", () => {
+    const s = new InputSender();
+    s.update(none, 0);
+    expect(s.update({ ...none, emote: 2 }, 500)).toEqual({ seq: 2, ...none, emote: 2 });
+    expect(s.update({ ...none, emote: 2 }, 550)).toBeUndefined(); // still the same
+    expect(s.update(none, 650)).toEqual({ seq: 3, ...none }); // let go: no emote field
+  });
+
+  it("puts every field of the keys in the message (none dropped on the way)", () => {
+    const keys = { ...up, hat: 1, shirt: 2, call: true, emote: 3 };
+    expect(new InputSender().update(keys, 0)).toEqual({ seq: 1, ...keys });
   });
 
   it("remembers the last message sent, for prediction (NET-01)", () => {
